@@ -3,6 +3,8 @@ description: SME Ops-Center rules (decoupling, Docker-first, no deprecated model
 globs:
   - "**/*"
 ---
+- Source of truth: follow docs/PRD.md. If a change is needed, update docs/PRD.md first, then implement.
+- Do not invent requirements outside docs/PRD.md. If something is missing, raise it as a question in a comment.
 
 - Docker-first: everything must run via docker compose. No host-only dependencies.
 - Strict decoupling: the frontend must ONLY call api-gateway over HTTP. Frontend must not call GCP, Xero/MCP, Redis, or Postgres directly.
@@ -13,3 +15,8 @@ globs:
 - Secrets: never commit secrets. Use .env.example only; .env must be gitignored.
 - Persistence: Postgres + uploads + sessions must use named volumes (data survives rebuilds).
 - Containers must run as non-root and use slim base images.
+- Application containers (Python/Node): Use UID 1000. Node images already have `node` user; use it directly. Python images: create user if UID 1000 doesn't exist.
+- Postgres/Redis: Do NOT override user; official images run as non-root by default and handle initialization correctly.
+- Node services with bind mounts: Use anonymous volume for `node_modules` (e.g., `/app/node_modules`) to preserve dependencies.
+- Python version: Use 3.12-slim for all Python services (aligned with PRD).
+- Node version: Pin in package.json engines field (>=20.0.0 <21.0.0).

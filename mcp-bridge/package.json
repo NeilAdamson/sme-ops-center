@@ -1,0 +1,18 @@
+{
+  "name": "mcp-bridge",
+  "version": "0.1.0",
+  "description": "MCP Bridge service for SME Ops-Center",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20.0.0 <21.0.0"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}

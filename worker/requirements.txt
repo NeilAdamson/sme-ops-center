@@ -1,0 +1,2 @@
+# Placeholder requirements - worker will be implemented incrementally
+# Empty file - no dependencies yet
