@@ -1,0 +1,137 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: sme-frontend
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./frontend:/app
+      - uploads:/app/uploads
+      - sessions:/app/sessions
+    environment:
+      - API_GATEWAY_URL=http://api-gateway:8000
+    depends_on:
+      - api-gateway
+    networks:
+      - sme-network
+    user: "1000:1000"
+    restart: unless-stopped
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: sme-api-gateway
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./api-gateway:/app
+      - uploads:/app/uploads
+      - sessions:/app/sessions
+    environment:
+      - DATABASE_URL=postgresql://smeuser:smepass@postgres:5432/smedb
+      - REDIS_URL=redis://redis:6379/0
+      - MCP_BRIDGE_URL=http://mcp-bridge:3000
+    depends_on:
+      - postgres
+      - redis
+      - mcp-bridge
+    networks:
+      - sme-network
+    user: "1000:1000"
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: sme-worker
+    volumes:
+      - ./worker:/app
+      - uploads:/app/uploads
+    environment:
+      - DATABASE_URL=postgresql://smeuser:smepass@postgres:5432/smedb
+      - REDIS_URL=redis://redis:6379/0
+      - API_GATEWAY_URL=http://api-gateway:8000
+    depends_on:
+      - postgres
+      - redis
+      - api-gateway
+    networks:
+      - sme-network
+    user: "1000:1000"
+    restart: unless-stopped
+
+  mcp-bridge:
+    build:
+      context: ./mcp-bridge
+      dockerfile: Dockerfile
+    container_name: sme-mcp-bridge
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./mcp-bridge:/app
+    environment:
+      - NODE_ENV=production
+    networks:
+      - sme-network
+    user: "1000:1000"
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: sme-postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=smeuser
+      - POSTGRES_PASSWORD=smepass
+      - POSTGRES_DB=smedb
+    networks:
+      - sme-network
+    user: "999:999"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smeuser -d smedb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: sme-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - sme-network
+    user: "999:999"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+    name: sme-pgdata
+  uploads:
+    name: sme-uploads
+  sessions:
+    name: sme-sessions
+  redis-data:
+    name: sme-redis-data
+
+networks:
+  sme-network:
+    name: sme-network
+    driver: bridge
