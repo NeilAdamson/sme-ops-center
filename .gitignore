@@ -1,0 +1,30 @@
+# secrets / local env
+.env
+*.env
+secrets/
+**/*.key
+**/*.pem
+**/*.pfx
+
+# python
+__pycache__/
+.venv/
+.venv*/
+*.pyc
+
+# node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# build outputs
+dist/
+build/
+.next/
+.streamlit/
+
+# os/editor
+.DS_Store
+.vscode/
+.idea/

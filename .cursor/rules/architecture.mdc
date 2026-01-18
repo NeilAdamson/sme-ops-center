@@ -1,0 +1,15 @@
+---
+description: SME Ops-Center rules (decoupling, Docker-first, no deprecated models, incremental build).
+globs:
+  - "**/*"
+---
+
+- Docker-first: everything must run via docker compose. No host-only dependencies.
+- Strict decoupling: the frontend must ONLY call api-gateway over HTTP. Frontend must not call GCP, Xero/MCP, Redis, or Postgres directly.
+- API-first: all business logic lives behind api-gateway REST endpoints (stable contracts). Streamlit is a demo shell only.
+- Incremental delivery only: Milestone 0 scaffold → Module A → Module B → Module C → hardening. Do not implement everything at once.
+- No deprecated AI models: do NOT use Gemini 1.5. Use Gemini 2.x/2.5 via Vertex with primary+fallback model IDs in env.
+- Xero safety: OAuth callback must be owned by mcp-bridge/api-gateway (NOT Streamlit). Enforce read-only tool allow-list for Xero at api-gateway.
+- Secrets: never commit secrets. Use .env.example only; .env must be gitignored.
+- Persistence: Postgres + uploads + sessions must use named volumes (data survives rebuilds).
+- Containers must run as non-root and use slim base images.
