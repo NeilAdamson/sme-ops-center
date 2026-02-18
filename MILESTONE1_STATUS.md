@@ -7,9 +7,7 @@
 - ✅ Task 2: Module A API endpoints (stub implementation)
 
 **Remaining:**
-- ⏳ Vertex AI Search integration (requires GCP setup)
-- ⏳ Document indexing workflow
-- ⏳ Query with citations (currently returns refusal)
+- ⏳ Vertex AI Search query integration (replace query stub with real retrieval)
 
 **Completed (New):**
 - ✅ Task 4: GCS smoke test endpoint (Google Cloud Storage integration test)
@@ -60,8 +58,8 @@
 
 **Functionality:**
 - Accepts multipart/form-data file upload
-- Saves file to uploads volume (`/app/uploads` - named volume)
-- Creates `doc_asset` record with `PENDING` status
+- Saves file to local volume (`/app/uploads`) or GCS at `gs://bucket/docs/<request_id>/<filename>` when `STORAGE_BACKEND=gcs`
+- Creates `doc_asset` record; when GCS, triggers Vertex AI Search import and updates `indexed_status` (INDEXING → READY or FAILED)
 - Creates `audit_event` for traceability
 - Returns `request_id`, `doc_id`, `filename`, success message
 
@@ -99,7 +97,44 @@ file: <file content>
 }
 ```
 
-#### 2. GET /docs/status
+#### 2. POST /docs/index
+**Purpose:** Trigger document indexing to Vertex AI Search for PENDING docs in GCS
+
+**Functionality:**
+- Indexes PENDING docs with `gs://` storage URIs (only when `STORAGE_BACKEND=gcs`)
+- Optional body: `{"doc_id": 1}` to index a specific doc; omit to index all PENDING docs
+- Updates `indexed_status` to READY or FAILED per doc
+- Returns `triggered`, `succeeded`, `failed` counts and per-doc details
+
+**Request:**
+```http
+POST /docs/index
+Content-Type: application/json
+
+{}
+```
+or
+```http
+POST /docs/index
+Content-Type: application/json
+
+{"doc_id": 1}
+```
+
+**Response:**
+```json
+{
+  "request_id": "uuid",
+  "triggered": 2,
+  "succeeded": 2,
+  "failed": 0,
+  "details": [
+    {"doc_id": 1, "filename": "example.pdf", "status": "ready", "error": null}
+  ]
+}
+```
+
+#### 3. GET /docs/status
 **Purpose:** Get status of all uploaded documents
 
 **Functionality:**
@@ -131,7 +166,7 @@ GET /docs/status
 }
 ```
 
-#### 3. POST /docs/query (Stub)
+#### 4. POST /docs/query (Stub)
 **Purpose:** Query documents (stub - returns refusal until Vertex AI Search integrated)
 
 **Functionality:**
@@ -221,22 +256,18 @@ All endpoints follow PRD Section 9 requirements:
 
 ## Next Steps
 
-1. **Vertex AI Search Integration** (requires GCP credentials):
-   - Implement document indexing to Vertex AI Search
-   - Update `doc_asset.datastore_ref` with search datastore reference
-   - Change `indexed_status` to `READY` after successful indexing
-
-2. **Query Implementation**:
+1. **Vertex AI Search Query Integration** (requires GCP credentials):
    - Replace stub query endpoint with Vertex AI Search retrieval
    - Implement citation extraction from search results
    - Return actual answers with citations (only if citations exist)
+   - Requires `DATA_STORE_ID`, `ENGINE_ID` in `.env`
 
-3. **Document Processing**:
+2. **Document Processing** (optional enhancements):
    - Add document parsing (PDF, DOCX, TXT)
    - Validate file types
    - Extract text content for indexing
 
-4. **Frontend Integration**: ✅ COMPLETE
+3. **Frontend Integration**: ✅ COMPLETE
    - ✅ Streamlit UI for document upload
    - ✅ Display document status list
    - ✅ Query interface with citation display (stub)
@@ -407,10 +438,23 @@ http://localhost:8000/gcs/smoke
 
 ### Next Steps
 
-1. **Use GCS for document storage** - Update `save_uploaded_file()` to use GCS when `STORAGE_BACKEND=gcs`
-2. **Implement GCS file retrieval** - For serving uploaded documents
-3. **Document indexing to Vertex AI Search** - Will require GCS storage for indexed documents
+1. **Vertex AI Search query API** - Replace query stub with Discovery Engine search/answer API
+2. **Implement GCS file retrieval** - For serving uploaded documents (if needed)
 
 ---
 
-**Milestone 1 Progress: 4/5 tasks complete (80%)**
+### Task 5a: Vertex AI Search Document Ingestion ✅
+
+**Implemented:**
+- GCS save path changed from `uploads/` to `docs/` (aligns with Data Store import prefix `gs://bucket/docs/`)
+- Discovery Engine `DocumentServiceClient.import_documents()` called after GCS upload
+- Automatic import on upload when `STORAGE_BACKEND=gcs`; `indexed_status` updated to READY/FAILED
+- `POST /docs/index` endpoint to trigger indexing for PENDING docs (all or by `doc_id`)
+- `DATA_STORE_ID` and `ENGINE_ID` added to `.env.example` and PRD
+- `google-cloud-discoveryengine==1.14.0` added to api-gateway requirements
+
+**Required env vars:** `GOOGLE_CLOUD_PROJECT`, `DATA_STORE_ID`, `DISCOVERY_ENGINE_LOCATION`, `GCS_BUCKET_NAME` (when using GCS)
+
+---
+
+**Milestone 1 Progress: 5/6 tasks complete (83%)**

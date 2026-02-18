@@ -39,6 +39,20 @@ class DocStatusResponse(BaseModel):
     documents: List[Dict[str, Any]]
 
 
+class DocIndexRequest(BaseModel):
+    """Request schema for trigger indexing (optional doc_id to index specific doc)."""
+    doc_id: Optional[int] = None  # If provided, index only this doc; else index all PENDING docs in GCS
+
+
+class DocIndexResponse(BaseModel):
+    """Response schema for trigger indexing."""
+    request_id: str
+    triggered: int
+    succeeded: int
+    failed: int
+    details: List[Dict[str, Any]] = []  # Per-doc results: doc_id, status, error
+
+
 class ErrorResponse(BaseModel):
     """Error response schema."""
     request_id: str

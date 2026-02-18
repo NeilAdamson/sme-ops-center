@@ -1,6 +1,7 @@
 """Document management routes (Module A)."""
 import logging
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
+from typing import Optional
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Body
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -9,6 +10,8 @@ from app.schemas import (
     DocQueryResponse,
     DocUploadResponse,
     DocStatusResponse,
+    DocIndexRequest,
+    DocIndexResponse,
     ErrorResponse,
     Citation
 )
@@ -19,9 +22,13 @@ from app.services import (
     create_doc_asset,
     create_audit_event,
     get_all_docs,
-    check_duplicate_filename
+    check_duplicate_filename,
+    get_pending_gcs_docs,
+    update_doc_indexed_status,
+    trigger_vertex_import,
+    STORAGE_BACKEND,
 )
-from app.models import AuditModule, AuditStatus
+from app.models import AuditModule, AuditStatus, IndexedStatus
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +76,16 @@ async def upload_document(
         # Create doc_asset record
         doc_asset = create_doc_asset(db, filename, storage_uri, request_id)
         
+        # Trigger Vertex AI Search import when using GCS (docs saved to gs://bucket/docs/)
+        if STORAGE_BACKEND == "gcs" and storage_uri.startswith("gs://"):
+            update_doc_indexed_status(db, doc_asset, IndexedStatus.INDEXING)
+            success, err = trigger_vertex_import(storage_uri, request_id)
+            if success:
+                update_doc_indexed_status(db, doc_asset, IndexedStatus.READY, datastore_ref=storage_uri)
+            else:
+                update_doc_indexed_status(db, doc_asset, IndexedStatus.FAILED)
+                logger.warning(f"Vertex import failed for doc_id={doc_asset.id}: {err}")
+        
         # Log audit event
         create_audit_event(
             db=db,
@@ -111,6 +128,54 @@ async def upload_document(
                 detail=str(e)
             ).dict()
         )
+
+
+@router.post("/index", response_model=DocIndexResponse)
+async def trigger_indexing(
+    request: Optional[DocIndexRequest] = Body(default=None),
+    db: Session = Depends(get_db)
+):
+    """
+    Trigger document indexing to Vertex AI Search.
+    Indexes PENDING docs with gs:// storage URIs. Optionally restrict to doc_id.
+    Only applies when STORAGE_BACKEND=gcs; local uploads cannot be indexed.
+    """
+    request_id = generate_request_id()
+    doc_id = request.doc_id if request else None
+    docs = get_pending_gcs_docs(db, doc_id)
+    triggered = len(docs)
+    succeeded = 0
+    failed = 0
+    details = []
+
+    for doc in docs:
+        update_doc_indexed_status(db, doc, IndexedStatus.INDEXING)
+        success, err = trigger_vertex_import(doc.storage_uri, request_id)
+        if success:
+            update_doc_indexed_status(db, doc, IndexedStatus.READY, datastore_ref=doc.storage_uri)
+            succeeded += 1
+            details.append({"doc_id": doc.id, "filename": doc.filename, "status": "ready", "error": None})
+        else:
+            update_doc_indexed_status(db, doc, IndexedStatus.FAILED)
+            failed += 1
+            details.append({"doc_id": doc.id, "filename": doc.filename, "status": "failed", "error": err})
+
+    create_audit_event(
+        db=db,
+        module=AuditModule.MODULE_A,
+        request_id=request_id,
+        sources_json={"triggered": triggered, "succeeded": succeeded, "failed": failed},
+        status=AuditStatus.SUCCESS if failed == 0 else AuditStatus.FAILURE,
+        error=None if failed == 0 else f"{failed} of {triggered} imports failed"
+    )
+
+    return DocIndexResponse(
+        request_id=request_id,
+        triggered=triggered,
+        succeeded=succeeded,
+        failed=failed,
+        details=details
+    )
 
 
 @router.get("/status", response_model=DocStatusResponse)

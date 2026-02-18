@@ -79,8 +79,9 @@ async def _save_to_gcs(file: UploadFile, filename: str, content: bytes, request_
     if not bucket_name:
         raise ValueError("GCS_BUCKET_NAME environment variable is required when STORAGE_BACKEND=gcs")
     
-    # Generate GCS object path: gs://bucket/uploads/<uuid>/<original_filename>
-    object_name = f"uploads/{request_id}/{filename}"
+    # Generate GCS object path: gs://bucket/docs/<uuid>/<original_filename>
+    # docs/ prefix aligns with Vertex AI Search Data Store import prefix (gs://bucket/docs/)
+    object_name = f"docs/{request_id}/{filename}"
     
     try:
         # Initialize GCS client
@@ -173,3 +174,92 @@ def check_duplicate_filename(db: Session, filename: str) -> Optional[DocAsset]:
         DocAsset.filename == filename,
         DocAsset.deleted_at.is_(None)
     ).first()
+
+
+def get_doc_by_id(db: Session, doc_id: int) -> Optional[DocAsset]:
+    """Get a document by ID (non-deleted only)."""
+    return db.query(DocAsset).filter(
+        DocAsset.id == doc_id,
+        DocAsset.deleted_at.is_(None)
+    ).first()
+
+
+def get_pending_gcs_docs(db: Session, doc_id: Optional[int] = None) -> list[DocAsset]:
+    """
+    Get documents eligible for Vertex AI Search indexing.
+    Returns PENDING docs with gs:// storage URIs. If doc_id provided, filters to that doc.
+    """
+    q = db.query(DocAsset).filter(
+        DocAsset.deleted_at.is_(None),
+        DocAsset.indexed_status == IndexedStatus.PENDING,
+        DocAsset.storage_uri.like("gs://%")
+    )
+    if doc_id is not None:
+        q = q.filter(DocAsset.id == doc_id)
+    return q.all()
+
+
+def update_doc_indexed_status(
+    db: Session,
+    doc_asset: DocAsset,
+    status: IndexedStatus,
+    datastore_ref: Optional[str] = None
+) -> None:
+    """Update document indexing status."""
+    doc_asset.indexed_status = status
+    if datastore_ref is not None:
+        doc_asset.datastore_ref = datastore_ref
+    db.commit()
+    db.refresh(doc_asset)
+
+
+def trigger_vertex_import(storage_uri: str, request_id: str = "") -> tuple[bool, Optional[str]]:
+    """
+    Trigger Vertex AI Search (Discovery Engine) document import from GCS.
+    Returns (success, error_message). On success, error_message is None.
+    Requires: GOOGLE_CLOUD_PROJECT, DISCOVERY_ENGINE_LOCATION, DATA_STORE_ID.
+    """
+    project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
+    location = os.getenv("DISCOVERY_ENGINE_LOCATION", "global")
+    data_store_id = os.getenv("DATA_STORE_ID")
+    if not project_id or not data_store_id:
+        return False, "Vertex AI Search not configured (GOOGLE_CLOUD_PROJECT, DATA_STORE_ID required)"
+    if not storage_uri.startswith("gs://"):
+        return False, f"Storage URI must be gs:// (got {storage_uri[:50]}...)"
+
+    try:
+        from google.api_core.client_options import ClientOptions
+        from google.cloud import discoveryengine
+
+        client_options = (
+            ClientOptions(api_endpoint=f"{location}-discoveryengine.googleapis.com")
+            if location != "global"
+            else None
+        )
+        client = discoveryengine.DocumentServiceClient(client_options=client_options)
+        parent = client.branch_path(
+            project=project_id,
+            location=location,
+            data_store=data_store_id,
+            branch="default_branch",
+        )
+        request = discoveryengine.ImportDocumentsRequest(
+            parent=parent,
+            gcs_source=discoveryengine.GcsSource(
+                input_uris=[storage_uri],
+                data_schema="content",
+            ),
+            reconciliation_mode=discoveryengine.ImportDocumentsRequest.ReconciliationMode.INCREMENTAL,
+        )
+        operation = client.import_documents(request=request)
+        response = operation.result()
+        logger.info(
+            f"Vertex import completed for {storage_uri} (request_id: {request_id})"
+        )
+        return True, None
+    except Exception as e:
+        logger.error(
+            f"Vertex import failed for {storage_uri}: {e} (request_id: {request_id})",
+            exc_info=True,
+        )
+        return False, str(e)

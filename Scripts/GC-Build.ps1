@@ -293,9 +293,24 @@ Write-Host ""
 
 # 8) Create bucket — Step 8
 # Use gcloud storage for bucket management.
+# First check if the specific bucket exists
 $bucketExists = (& gcloud storage buckets describe "gs://$Bucket" --format="value(name)" 2>$null)
 if (-not $bucketExists) {
-  Invoke-Checked "gcloud storage buckets create gs://$Bucket --project $ProjectId --location $Region" "Step 8 — Create uploads bucket"
+  # If bucket doesn't exist, check if ANY bucket matching our pattern exists for this project
+  # (in case state file was lost but bucket still exists)
+  $bucketPattern = "aiops-gc-$ClientCode-$Env-uploads-*"
+  $existingBuckets = (& gcloud storage buckets list --project $ProjectId --filter="name:$bucketPattern" --format="value(name)" 2>$null)
+  
+  if ($existingBuckets) {
+    # Found existing bucket(s) matching pattern - use the first one
+    $existingBucket = ($existingBuckets -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 1).Trim()
+    Write-Host "`n==> Step 8 — Found existing bucket matching pattern: $existingBucket" -ForegroundColor Yellow
+    Write-Host "    Reusing existing bucket instead of creating new one." -ForegroundColor Yellow
+    $Bucket = $existingBucket -replace "^gs://", ""  # Remove gs:// prefix if present
+  } else {
+    # No existing bucket found - create new one
+    Invoke-Checked "gcloud storage buckets create gs://$Bucket --project $ProjectId --location $Region" "Step 8 — Create uploads bucket"
+  }
 } else {
   Write-Host "`n==> Step 8 — Bucket already exists: gs://$Bucket" -ForegroundColor Yellow
 }
@@ -360,6 +375,36 @@ try {
   Write-Host "`nFoundation state written to: $StatePath" -ForegroundColor Gray
 } catch {
   Write-Host "`nWARNING: Failed to write foundation state file: $StatePath" -ForegroundColor Yellow
+}
+
+# Update .env with GCP parameters (merge into existing .env without overwriting other vars)
+$EnvPath = Join-Path $PSScriptRoot "..\.env"
+$EnvExamplePath = Join-Path $PSScriptRoot "..\.env.example"
+try {
+  $envContent = if (Test-Path $EnvPath) { Get-Content $EnvPath -Raw } else { if (Test-Path $EnvExamplePath) { Get-Content $EnvExamplePath -Raw } else { "" } }
+  $updates = @{
+    "GOOGLE_CLOUD_PROJECT"    = $ProjectId
+    "GCS_BUCKET_NAME"         = $Bucket
+    "APP_REGION"              = $Region
+    "DISCOVERY_ENGINE_LOCATION" = "global"
+    "STORAGE_BACKEND"         = "gcs"
+  }
+  foreach ($key in $updates.Keys) {
+    $val = $updates[$key]
+    $escapedKey = [regex]::Escape($key)
+    $pattern = "(?m)^$escapedKey\s*=.*$"
+    $replacement = "${key}=$val"
+    if ($envContent -match $pattern) {
+      $envContent = $envContent -replace $pattern, $replacement
+    } else {
+      $envContent += "`n$key=$val`n"
+    }
+  }
+  $envContent = $envContent.Trim()
+  Set-Content -Path $EnvPath -Value $envContent -Encoding utf8 -NoNewline:$false
+  Write-Host "Updated .env with GOOGLE_CLOUD_PROJECT, GCS_BUCKET_NAME, APP_REGION, DISCOVERY_ENGINE_LOCATION, STORAGE_BACKEND" -ForegroundColor Gray
+} catch {
+  Write-Host "`nWARNING: Failed to update .env: $_" -ForegroundColor Yellow
 }
 
 # Summary

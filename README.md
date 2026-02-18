@@ -24,12 +24,16 @@ cp .env.example .env
 ```
 
 3. **Edit `.env` with your actual values:**
-   - GCP Project ID and credentials
-   - `STORAGE_BACKEND` (set to `gcs` for Google Cloud Storage or `local` for local storage)
-   - `GCS_BUCKET_NAME` (if using GCS)
+   - `STORAGE_BACKEND=gcs` (required for Vertex AI Search document ingestion)
+   - `GOOGLE_CLOUD_PROJECT` — your GCP project ID
+   - `GCS_BUCKET_NAME` — your GCS bucket name
+   - `DATA_STORE_ID` and `ENGINE_ID` — from Vertex AI Search console (Steps 13–15 in GCP checklist)
+   - `DISCOVERY_ENGINE_LOCATION=global`
    - Xero OAuth credentials (for Module C)
    - Database passwords
    - Other configuration as needed
+
+   **Data Store import prefix:** When creating the Vertex AI Search Data Store, set the import prefix to `gs://<bucket>/docs/` so it matches where the app uploads documents.
 
 4. **Configure Google Cloud Storage credentials:**
    - Place your GCP service account JSON file at `E:\sme-ops-center-secrets\smeops-api-sa.json`
@@ -99,17 +103,19 @@ Docker Compose automatically handles the startup dependencies:
 
 See [MILESTONE0_STATUS.md](./MILESTONE0_STATUS.md) for detailed status and issues resolved.
 
-### Milestone 1: 🟡 In Progress (90% Complete)
+### Milestone 1: 🟡 In Progress (95% Complete)
 - ✅ Task 1: Database migrations and core tables (`doc_asset`, `audit_event`)
-- ✅ Task 2: Module A API endpoints (upload, status, query stub)
+- ✅ Task 2: Module A API endpoints (upload, status, index, query stub)
 - ✅ Task 3: Frontend UI implementation (end-to-end flow with trust surface)
 - ✅ Task 4: GCS smoke test endpoint (Google Cloud Storage integration test)
-- ⏳ Task 5: Vertex AI Search integration (requires GCP setup)
+- ✅ Task 5a: Vertex AI Search document ingestion (GCS `docs/` path + Discovery Engine import)
+- ⏳ Task 5b: Vertex AI Search query integration (replace stub with real retrieval)
 
 **Implemented APIs:**
-- `POST /docs/upload` - Upload documents with persistence, audit logging, and duplicate detection (warns but allows duplicates)
-- `GET /docs/status` - Get document status list
-- `POST /docs/query` - Query stub (returns refusal until Vertex AI Search integrated)
+- `POST /docs/upload` - Upload documents; when `STORAGE_BACKEND=gcs`, saves to `gs://bucket/docs/` and triggers Vertex AI Search import
+- `POST /docs/index` - Trigger indexing for PENDING docs in GCS (optional `doc_id` to index specific doc)
+- `GET /docs/status` - Get document status list (including `indexed_status`: pending/indexing/ready/failed)
+- `POST /docs/query` - Query stub (returns refusal until Vertex AI Search query API integrated)
 - `GET /gcs/smoke` - GCS smoke test (uploads, verifies, and deletes a test blob)
 
 **Implemented Frontend:**
@@ -121,7 +127,7 @@ See [MILESTONE0_STATUS.md](./MILESTONE0_STATUS.md) for detailed status and issue
 See [MILESTONE1_STATUS.md](./MILESTONE1_STATUS.md) for detailed status.
 
 ### Next Milestones
-- **Milestone 1** (remaining): Vertex AI Search integration for document query
+- **Milestone 1** (remaining): Vertex AI Search query API integration (replace query stub)
 - **Milestone 2**: Module B - Email triage and approval workflow
 - **Milestone 3**: Module C - Xero Finance Lens with read-only MCP
 - **Milestone 4**: Demo hardening

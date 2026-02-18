@@ -27,17 +27,19 @@ services:
     container_name: sme-api-gateway
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     volumes:
       - ./api-gateway:/app
       - uploads:/app/uploads
       - sessions:/app/sessions
-      - E:\sme-ops-center-secrets\smeops-api-sa.json:/run/secrets/gcp-sa.json:ro
+      - ./secrets/aiops-gc-poc-pilot__aiops-gc-app-key.json:/run/secrets/gcp-sa.json:ro
     environment:
       - DATABASE_URL=postgresql://smeops:change-me@postgres:5432/smeops
       - REDIS_URL=redis://redis:6379/0
       - MCP_BRIDGE_URL=http://mcp-bridge:3000
       - GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-sa.json
-      - GCS_BUCKET_NAME=sme-ops-center-uploads-sme-ai-prototype
+      - GCS_BUCKET_NAME=${GCS_BUCKET_NAME}
       - STORAGE_BACKEND=${STORAGE_BACKEND:-local}
     depends_on:
       postgres:

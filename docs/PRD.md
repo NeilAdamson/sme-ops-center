@@ -401,6 +401,10 @@ VERTEX_LOCATION="global"              # or your chosen Vertex GenAI location
 DISCOVERY_ENGINE_LOCATION="global"    # Vertex AI Search location (commonly global)
 GCS_BUCKET_NAME="sme-ops-center-uploads"
 
+# Vertex AI Search / Discovery Engine (from console Steps 13-15)
+DATA_STORE_ID="your-data-store-id"
+ENGINE_ID="your-engine-id"
+
 # Vertex AI Search / RAG controls
 DOCS_RELEVANCE_MODE="HIGH"            # or FILTER_SPEC
 DOCS_SEMANTIC_THRESHOLD=0.7           # used if FILTER_SPEC
