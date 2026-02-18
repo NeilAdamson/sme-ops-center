@@ -12,10 +12,14 @@ from app.models import DocAsset, AuditEvent, IndexedStatus, AuditModule, AuditSt
 
 logger = logging.getLogger(__name__)
 
+# Get storage backend from environment (default to 'local')
+STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "local").lower()
+
 # Get uploads directory from environment or use default
 UPLOADS_DIR = Path(os.getenv("UPLOADS_DIR", "/app/uploads"))
 # Ensure directory exists and is writable (created in Dockerfile, but verify)
-UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+if STORAGE_BACKEND == "local":
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def generate_request_id() -> str:
@@ -30,28 +34,78 @@ def hash_prompt(prompt: str) -> str:
 
 async def save_uploaded_file(file: UploadFile, request_id: str) -> tuple[str, str]:
     """
-    Save uploaded file to uploads volume.
+    Save uploaded file to storage backend (local or GCS).
     Returns (storage_uri, filename).
     """
-    # Generate unique filename to avoid conflicts
     original_filename = file.filename or "unnamed"
-    file_extension = Path(original_filename).suffix
+    
+    # Read file content once (needed for both backends)
+    content = await file.read()
+    
+    if STORAGE_BACKEND == "gcs":
+        # Upload to Google Cloud Storage
+        return await _save_to_gcs(file, original_filename, content, request_id)
+    else:
+        # Save to local volume (default behavior)
+        return _save_to_local(original_filename, content, request_id)
+
+
+def _save_to_local(filename: str, content: bytes, request_id: str) -> tuple[str, str]:
+    """Save file to local uploads volume."""
+    file_extension = Path(filename).suffix
     unique_filename = f"{request_id}{file_extension}"
     storage_path = UPLOADS_DIR / unique_filename
     
     # Ensure directory exists
     storage_path.parent.mkdir(parents=True, exist_ok=True)
     
-    # Read file content and save
-    content = await file.read()
+    # Write file content
     with open(storage_path, "wb") as f:
         f.write(content)
     
     # Return relative path for storage_uri
     storage_uri = f"uploads/{unique_filename}"
     
-    logger.info(f"Saved file: {original_filename} -> {storage_uri} (request_id: {request_id})")
-    return storage_uri, original_filename
+    logger.info(f"Saved file to local: {filename} -> {storage_uri} (request_id: {request_id})")
+    return storage_uri, filename
+
+
+async def _save_to_gcs(file: UploadFile, filename: str, content: bytes, request_id: str) -> tuple[str, str]:
+    """Save file to Google Cloud Storage."""
+    from google.cloud import storage as gcs_storage
+    from google.cloud.exceptions import GoogleCloudError
+    
+    bucket_name = os.getenv("GCS_BUCKET_NAME")
+    if not bucket_name:
+        raise ValueError("GCS_BUCKET_NAME environment variable is required when STORAGE_BACKEND=gcs")
+    
+    # Generate GCS object path: gs://bucket/uploads/<uuid>/<original_filename>
+    object_name = f"uploads/{request_id}/{filename}"
+    
+    try:
+        # Initialize GCS client
+        client = gcs_storage.Client()
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(object_name)
+        
+        # Determine content type from file
+        content_type = file.content_type or "application/octet-stream"
+        
+        # Upload to GCS
+        blob.upload_from_string(content, content_type=content_type)
+        
+        # Construct full gs:// URI
+        storage_uri = f"gs://{bucket_name}/{object_name}"
+        
+        logger.info(f"Saved file to GCS: {filename} -> {storage_uri} (request_id: {request_id})")
+        return storage_uri, filename
+        
+    except GoogleCloudError as e:
+        logger.error(f"GCS upload failed: {e} (request_id: {request_id})", exc_info=True)
+        raise RuntimeError(f"Failed to upload to GCS: {str(e)}") from e
+    except Exception as e:
+        logger.error(f"Unexpected error during GCS upload: {e} (request_id: {request_id})", exc_info=True)
+        raise RuntimeError(f"Unexpected error during GCS upload: {str(e)}") from e
 
 
 def create_doc_asset(

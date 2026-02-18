@@ -31,10 +31,14 @@ services:
       - ./api-gateway:/app
       - uploads:/app/uploads
       - sessions:/app/sessions
+      - E:\sme-ops-center-secrets\smeops-api-sa.json:/run/secrets/gcp-sa.json:ro
     environment:
       - DATABASE_URL=postgresql://smeops:change-me@postgres:5432/smeops
       - REDIS_URL=redis://redis:6379/0
       - MCP_BRIDGE_URL=http://mcp-bridge:3000
+      - GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-sa.json
+      - GCS_BUCKET_NAME=sme-ops-center-uploads-sme-ai-prototype
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-local}
     depends_on:
       postgres:
         condition: service_healthy
@@ -60,10 +64,12 @@ services:
     volumes:
       - ./worker:/app
       - uploads:/app/uploads
+      - E:\sme-ops-center-secrets:/app/secrets:ro
     environment:
       - DATABASE_URL=postgresql://smeops:change-me@postgres:5432/smeops
       - REDIS_URL=redis://redis:6379/0
       - API_GATEWAY_URL=http://api-gateway:8000
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/smeops-api-sa-71ec6a6a2950.json
     depends_on:
       postgres:
         condition: service_healthy

@@ -37,6 +37,7 @@ The API Gateway service:
 
 - `GET /health` - Service health check
 - `GET /` - Service information
+- `GET /gcs/smoke` - GCS smoke test (uploads, verifies, and deletes a test blob)
 
 ### Module A: Documents (Ask Your Business)
 
@@ -121,6 +122,33 @@ Content-Type: application/json
 - Logs audit event with prompt hash
 - Will be replaced with Vertex AI Search integration
 
+#### GCS Smoke Test
+```http
+GET /gcs/smoke
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "bucket": "sme-ops-center-uploads-sme-ai-prototype",
+  "object": "smoke/7ac7d93b-ebb6-4c2e-9dea-07bc22118ae3.txt",
+  "request_id": "uuid"
+}
+```
+
+**Functionality:**
+- Uploads a small test blob to Google Cloud Storage
+- Verifies the blob exists (metadata check)
+- Deletes the test blob
+- Returns success status with bucket and object information
+- Useful for testing GCS connectivity and credentials
+
+**Requirements:**
+- `GOOGLE_APPLICATION_CREDENTIALS` environment variable must be set
+- `GCS_BUCKET_NAME` environment variable must be set
+- GCP service account must have Storage Object Admin permissions on the bucket
+
 ### Future Endpoints (Not Yet Implemented)
 
 - `POST /docs/index` - Trigger document indexing
@@ -182,7 +210,8 @@ api-gateway/
 │   ├── services.py          # Business logic
 │   ├── routes/
 │   │   ├── __init__.py
-│   │   └── docs.py          # Module A routes
+│   │   ├── docs.py          # Module A routes
+│   │   └── gcs.py           # GCS smoke test routes
 │   └── migrations.py        # Migration runner
 ├── migrations/
 │   ├── env.py               # Alembic environment
@@ -201,6 +230,7 @@ api-gateway/
 - `psycopg2-binary==2.9.9` - PostgreSQL driver
 - `python-multipart==0.0.6` - File upload support
 - `python-dotenv==1.0.0` - Environment variable management
+- `google-cloud-storage==2.14.0` - Google Cloud Storage client library
 
 ### Running Locally
 
@@ -235,12 +265,16 @@ When the service is running, visit:
 - `MCP_BRIDGE_URL` - MCP Bridge service URL (default: http://mcp-bridge:3000)
 - `UPLOADS_DIR` - Directory for uploaded files (default: /app/uploads)
 - `CORS_ORIGINS` - Allowed CORS origins (default: http://localhost:8501)
+- `GOOGLE_APPLICATION_CREDENTIALS` - Path to GCP service account JSON file (default: /run/secrets/gcp-sa.json)
+- `GCS_BUCKET_NAME` - Google Cloud Storage bucket name (required for GCS operations)
+- `STORAGE_BACKEND` - Storage backend: `local` or `gcs` (configured in `.env`)
 
 ### Volume Mounts
 
 - `./api-gateway:/app` - Source code (development)
 - `uploads:/app/uploads` - Named volume for file persistence
 - `sessions:/app/sessions` - Named volume for session data
+- `E:\sme-ops-center-secrets\smeops-api-sa.json:/run/secrets/gcp-sa.json:ro` - GCP service account credentials (read-only)
 
 ## Security
 
@@ -269,6 +303,9 @@ curl http://localhost:8000/docs/status
 curl -X POST "http://localhost:8000/docs/query" \
   -H "Content-Type: application/json" \
   -d '{"query": "test query"}'
+
+# GCS smoke test
+curl http://localhost:8000/gcs/smoke
 ```
 
 ### Database Verification
@@ -287,12 +324,46 @@ SELECT * FROM doc_asset;
 SELECT * FROM audit_event ORDER BY ts DESC LIMIT 10;
 ```
 
+## Google Cloud Storage Integration
+
+The API Gateway supports Google Cloud Storage for document storage. This is configured via environment variables and Docker Compose volume mounts.
+
+### Setup
+
+1. **Create a GCS bucket** (e.g., `sme-ops-center-uploads-sme-ai-prototype`)
+2. **Create a GCP service account** with Storage Object Admin permissions
+3. **Download the service account JSON key**
+4. **Place the key file** at `E:\sme-ops-center-secrets\smeops-api-sa.json`
+5. **Set environment variables**:
+   - `GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-sa.json` (already configured in docker-compose.yml)
+   - `GCS_BUCKET_NAME=sme-ops-center-uploads-sme-ai-prototype` (already configured in docker-compose.yml)
+   - `STORAGE_BACKEND=gcs` (set in `.env` file)
+
+### Testing
+
+Test GCS connectivity using the smoke test endpoint:
+```bash
+curl http://localhost:8000/gcs/smoke
+```
+
+This will upload, verify, and delete a test blob, confirming that:
+- Credentials are correctly mounted
+- Service account has proper permissions
+- GCS bucket is accessible
+
+### Future Integration
+
+- Update `save_uploaded_file()` to use GCS when `STORAGE_BACKEND=gcs`
+- Store document metadata with GCS object references
+- Serve documents from GCS via signed URLs or direct access
+
 ## Next Steps
 
 1. **Vertex AI Search Integration**
    - Implement document indexing
    - Replace query stub with actual search
    - Return citations from search results
+   - Use GCS for document storage if `STORAGE_BACKEND=gcs`
 
 2. **Module B Implementation**
    - Email upload and parsing

@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 from app.migrations import run_migrations
-from app.routes import docs
+from app.routes import docs, gcs
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -21,6 +21,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(docs.router)
+app.include_router(gcs.router)
 
 
 @app.on_event("startup")

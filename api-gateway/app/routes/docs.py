@@ -28,6 +28,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/docs", tags=["docs"])
 
 
+@router.get("/config")
+async def get_storage_config():
+    """
+    Get storage backend configuration.
+    
+    Returns the active storage backend (local or gcs) for frontend display.
+    """
+    from app.services import STORAGE_BACKEND
+    return {
+        "storage_backend": STORAGE_BACKEND
+    }
+
+
 @router.post("/upload", response_model=DocUploadResponse)
 async def upload_document(
     file: UploadFile = File(...),

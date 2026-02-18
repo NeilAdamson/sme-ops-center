@@ -25,11 +25,18 @@ cp .env.example .env
 
 3. **Edit `.env` with your actual values:**
    - GCP Project ID and credentials
+   - `STORAGE_BACKEND` (set to `gcs` for Google Cloud Storage or `local` for local storage)
+   - `GCS_BUCKET_NAME` (if using GCS)
    - Xero OAuth credentials (for Module C)
    - Database passwords
    - Other configuration as needed
 
-4. **Start all services:**
+4. **Configure Google Cloud Storage credentials:**
+   - Place your GCP service account JSON file at `E:\sme-ops-center-secrets\smeops-api-sa.json`
+   - The file will be automatically mounted to the `api-gateway` container at `/run/secrets/gcp-sa.json` (read-only)
+   - Set `GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-sa.json` in `.env` (already configured in docker-compose.yml)
+
+5. **Start all services:**
 ```bash
 docker compose up --build
 ```
@@ -47,7 +54,7 @@ Docker Compose automatically handles the startup dependencies:
 
 **No manual build sequence needed** — just run `docker compose up --build` and all services will start in the correct order.
 
-5. **Access services:**
+6. **Access services:**
    - Frontend: http://localhost:8501
    - API Gateway: http://localhost:8000
    - MCP Bridge: http://localhost:3000
@@ -58,6 +65,7 @@ Docker Compose automatically handles the startup dependencies:
 
 - API Gateway: http://localhost:8000/health
 - MCP Bridge: http://localhost:3000/health
+- GCS Smoke Test: http://localhost:8000/gcs/smoke (tests Google Cloud Storage connectivity)
 
 ## Architecture
 
@@ -91,16 +99,18 @@ Docker Compose automatically handles the startup dependencies:
 
 See [MILESTONE0_STATUS.md](./MILESTONE0_STATUS.md) for detailed status and issues resolved.
 
-### Milestone 1: 🟡 In Progress (85% Complete)
+### Milestone 1: 🟡 In Progress (90% Complete)
 - ✅ Task 1: Database migrations and core tables (`doc_asset`, `audit_event`)
 - ✅ Task 2: Module A API endpoints (upload, status, query stub)
 - ✅ Task 3: Frontend UI implementation (end-to-end flow with trust surface)
-- ⏳ Task 4: Vertex AI Search integration (requires GCP setup)
+- ✅ Task 4: GCS smoke test endpoint (Google Cloud Storage integration test)
+- ⏳ Task 5: Vertex AI Search integration (requires GCP setup)
 
 **Implemented APIs:**
 - `POST /docs/upload` - Upload documents with persistence, audit logging, and duplicate detection (warns but allows duplicates)
 - `GET /docs/status` - Get document status list
 - `POST /docs/query` - Query stub (returns refusal until Vertex AI Search integrated)
+- `GET /gcs/smoke` - GCS smoke test (uploads, verifies, and deletes a test blob)
 
 **Implemented Frontend:**
 - Landing page with 3 module tiles (Docs enabled, Inbox/Finance coming soon)
@@ -140,6 +150,8 @@ sme-ops-center/
 ├── api-gateway/            # FastAPI backend
 │   ├── app/                # Application code
 │   │   ├── routes/         # API routes
+│   │   │   ├── docs.py     # Module A routes
+│   │   │   └── gcs.py      # GCS smoke test routes
 │   │   ├── models.py       # Database models
 │   │   ├── schemas.py      # Pydantic schemas
 │   │   └── services.py     # Business logic
@@ -189,6 +201,7 @@ API Gateway automatically runs database migrations on startup (via `app/migratio
 - Source code is bind-mounted for development (`./service:/app`)
 - `mcp-bridge` uses anonymous volume for `node_modules` to preserve dependencies
 - Named volumes (`pgdata`, `uploads`, `sessions`, `redis-data`) persist across rebuilds
+- `api-gateway` mounts GCP service account credentials: `E:\sme-ops-center-secrets\smeops-api-sa.json:/run/secrets/gcp-sa.json:ro`
 
 ## Troubleshooting
 

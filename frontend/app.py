@@ -3,7 +3,7 @@ SME Ops-Center Frontend
 Operational AI Demo-in-a-Box
 """
 import streamlit as st
-from utils import upload_document, get_document_status, query_documents, API_BASE_URL
+from utils import upload_document, get_document_status, query_documents, get_storage_config, API_BASE_URL
 from datetime import datetime
 
 st.set_page_config(
@@ -68,6 +68,18 @@ def render_docs_page():
     if st.button("← Back to Home"):
         st.session_state.current_page = "landing"
         st.rerun()
+    
+    # Storage backend badge
+    try:
+        config = get_storage_config()
+        storage_backend = config.get("storage_backend", "local") if config else "local"
+        if storage_backend == "gcs":
+            st.info("🗄️ **Storage:** GCS (Google Cloud Storage)")
+        else:
+            st.info("💾 **Storage:** Local")
+    except Exception:
+        # Fallback if config endpoint fails
+        st.info("💾 **Storage:** Local")
     
     # Trust surface: Request ID panel (minimal)
     with st.sidebar:

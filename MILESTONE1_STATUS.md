@@ -11,6 +11,9 @@
 - ⏳ Document indexing workflow
 - ⏳ Query with citations (currently returns refusal)
 
+**Completed (New):**
+- ✅ Task 4: GCS smoke test endpoint (Google Cloud Storage integration test)
+
 **Frontend UI Tasks:**
 - ✅ Task 1: Environment variable configuration (`API_BASE_URL`)
 - ✅ Task 2: End-to-end UI flow (landing page, Docs module)
@@ -324,4 +327,90 @@ docker compose up --build
 
 ---
 
-**Milestone 1 Progress: 2/3 tasks complete (66%)**
+## Task 4: GCS Smoke Test Endpoint ✅
+
+### Implemented
+
+- **GCS smoke test endpoint** at `GET /gcs/smoke`
+- **Google Cloud Storage integration** using `google-cloud-storage` library
+- **Credentials mounting** via Docker Compose volume mount
+- **Environment configuration** for `GCS_BUCKET_NAME` and `GOOGLE_APPLICATION_CREDENTIALS`
+
+### Functionality
+
+The smoke test endpoint:
+1. **Uploads** a small text blob to `gs://<bucket>/smoke/<uuid>.txt`
+2. **Verifies** the blob exists (reloads metadata)
+3. **Deletes** the test blob
+4. **Returns** success response with `ok`, `bucket`, `object`, and `request_id`
+
+**Request:**
+```http
+GET /gcs/smoke
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "bucket": "sme-ops-center-uploads-sme-ai-prototype",
+  "object": "smoke/7ac7d93b-ebb6-4c2e-9dea-07bc22118ae3.txt",
+  "request_id": "fd7fab49-1ed5-4c4e-84f7-485e8da84155"
+}
+```
+
+### Configuration
+
+**Docker Compose:**
+- Volume mount: `E:\sme-ops-center-secrets\smeops-api-sa.json:/run/secrets/gcp-sa.json:ro` (read-only)
+- Environment variable: `GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-sa.json`
+- Environment variable: `GCS_BUCKET_NAME=sme-ops-center-uploads-sme-ai-prototype`
+
+**Environment:**
+- `.env` file sets `STORAGE_BACKEND=gcs` (not committed, as per security best practices)
+- GCS credentials are mounted as a secret file (read-only)
+
+### Files Created/Modified
+
+- `api-gateway/app/routes/gcs.py` - New GCS smoke test route
+- `api-gateway/main.py` - Added GCS router
+- `api-gateway/requirements.txt` - Added `google-cloud-storage==2.14.0`
+- `docker-compose.yml` - Added credentials volume mount and environment variables
+- `.env` - Set `STORAGE_BACKEND=gcs` (local file, not committed)
+
+### Acceptance Criteria Met
+
+- ✅ GCS smoke test endpoint implemented
+- ✅ Credentials mounted securely (read-only)
+- ✅ Environment variables configured
+- ✅ Test successfully uploads, verifies, and deletes blobs
+- ✅ Error handling for missing configuration or GCS errors
+- ✅ Returns proper response format with `request_id`
+
+### Testing
+
+**Test the endpoint:**
+```powershell
+# PowerShell
+Invoke-RestMethod -Uri "http://localhost:8000/gcs/smoke" -Method Get | ConvertTo-Json
+```
+
+```bash
+# curl
+curl http://localhost:8000/gcs/smoke
+```
+
+**Or visit in browser:**
+```
+http://localhost:8000/gcs/smoke
+```
+
+### Next Steps
+
+1. **Use GCS for document storage** - Update `save_uploaded_file()` to use GCS when `STORAGE_BACKEND=gcs`
+2. **Implement GCS file retrieval** - For serving uploaded documents
+3. **Document indexing to Vertex AI Search** - Will require GCS storage for indexed documents
+
+---
+
+**Milestone 1 Progress: 4/5 tasks complete (80%)**

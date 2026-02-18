@@ -71,3 +71,18 @@ def query_documents(query: str) -> Optional[Dict[str, Any]]:
             except:
                 return {"error": f"HTTP {e.response.status_code}: {str(e)}"}
         return {"error": str(e)}
+
+
+def get_storage_config() -> Optional[Dict[str, Any]]:
+    """Get storage backend configuration."""
+    try:
+        response = requests.get(
+            f"{API_BASE_URL}/docs/config",
+            timeout=5
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Config query failed: {e}")
+        # Return default if error (fallback to local)
+        return {"storage_backend": "local"}
