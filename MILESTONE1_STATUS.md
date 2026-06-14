@@ -393,9 +393,8 @@ GET /gcs/smoke
 ### Configuration
 
 **Docker Compose:**
-- Volume mount: `E:\sme-ops-center-secrets\smeops-api-sa.json:/run/secrets/gcp-sa.json:ro` (read-only)
-- Environment variable: `GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-sa.json`
-- Environment variable: `GCS_BUCKET_NAME=sme-ops-center-uploads-sme-ai-prototype`
+- `env_file: .env`; credentials: `./secrets/aiops-gc-poc-pilot__aiops-gc-app-key.json:/run/secrets/gcp-sa.json:ro`
+- Environment: `GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-sa.json`, `GCS_BUCKET_NAME` from `.env`
 
 **Environment:**
 - `.env` file sets `STORAGE_BACKEND=gcs` (not committed, as per security best practices)
@@ -451,9 +450,20 @@ http://localhost:8000/gcs/smoke
 - Automatic import on upload when `STORAGE_BACKEND=gcs`; `indexed_status` updated to READY/FAILED
 - `POST /docs/index` endpoint to trigger indexing for PENDING docs (all or by `doc_id`)
 - `DATA_STORE_ID` and `ENGINE_ID` added to `.env.example` and PRD
-- `google-cloud-discoveryengine==1.14.0` added to api-gateway requirements
+- `google-cloud-discoveryengine==0.17.0` added to api-gateway requirements
 
 **Required env vars:** `GOOGLE_CLOUD_PROJECT`, `DATA_STORE_ID`, `DISCOVERY_ENGINE_LOCATION`, `GCS_BUCKET_NAME` (when using GCS)
+
+### GCP Scripts (aligned with docs)
+
+| Script | Purpose |
+|--------|---------|
+| `GC-Build.ps1` | Foundation: project, bucket, SA, IAM; grants Discovery Engine SA `storage.admin` and bucket `objectAdmin` |
+| `GC-Create-DataStores.ps1` | Creates Operations, Compliance, Finance buckets; grants DE and current user access; use `docs/` folder per bucket |
+| `GC-Fix-DiscoveryEngine-Permissions.ps1` | Fixes "storage.objects.get" / connector failures: DE SA + console user on all buckets |
+| `GC-Validate-Regions.ps1` | Validates region compatibility (GCS, Vertex, Discovery Engine) |
+
+**Vertex AI Search permissions:** Discovery Engine service agent needs project-level `storage.admin` and bucket-level `storage.objectAdmin`. Console user needs `storage.objectViewer` on each bucket to pass "Create data store" path validation. See README GCP Setup Scripts.
 
 ---
 

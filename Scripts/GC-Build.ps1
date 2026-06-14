@@ -320,7 +320,10 @@ Invoke-Checked "gcloud storage buckets update gs://$Bucket --uniform-bucket-leve
 
 # 10) Bucket IAM — Step 10
 Invoke-Checked -Cmd "gcloud storage buckets add-iam-policy-binding gs://$Bucket --member `"serviceAccount:$SaEmail`" --role roles/storage.objectAdmin" -Description "Step 10A — Bucket IAM for app SA (objectAdmin)"
-Invoke-Checked -Cmd "gcloud storage buckets add-iam-policy-binding gs://$Bucket --member `"serviceAccount:$DeServiceAgent`" --role roles/storage.objectViewer" -Description "Step 10B — Bucket IAM for Discovery Engine service agent (objectViewer)"
+Invoke-Checked -Cmd "gcloud storage buckets add-iam-policy-binding gs://$Bucket --member `"serviceAccount:$DeServiceAgent`" --role roles/storage.objectAdmin" -Description "Step 10B — Bucket IAM for Discovery Engine service agent (objectAdmin)"
+
+# 10D) Grant project-level storage.admin to Discovery Engine service agent (required for connector operations)
+Invoke-Checked -Cmd "gcloud projects add-iam-policy-binding $ProjectId --member `"serviceAccount:$DeServiceAgent`" --role roles/storage.admin" -Description "Step 10D — Grant storage.admin to Discovery Engine service agent (project-level)"
 
 # 10C) Grant script runner (current gcloud account) objectAdmin so smoke test can upload/delete
 $CurrentAccount = (& gcloud config get-value account 2>$null).Trim()

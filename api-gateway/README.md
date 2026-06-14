@@ -71,9 +71,9 @@ file: <file content>
 ```
 
 **Functionality:**
-- Saves file to uploads volume (`/app/uploads`)
-- Creates `doc_asset` record with `PENDING` status
-- Logs audit event
+- Saves file to local volume (`/app/uploads`) or GCS at `gs://bucket/docs/<request_id>/<filename>` when `STORAGE_BACKEND=gcs`
+- When GCS: triggers Vertex AI Search import and updates `indexed_status` (INDEXING → READY or FAILED)
+- Creates `doc_asset` record; logs audit event
 
 #### Get Document Status
 ```http
@@ -108,7 +108,7 @@ Content-Type: application/json
 }
 ```
 
-**Response (Stub - until Vertex AI Search integrated):**
+**Response (Stub - until Vertex AI Search query API integrated):**
 ```json
 {
   "request_id": "uuid",
@@ -118,9 +118,22 @@ Content-Type: application/json
 ```
 
 **Functionality:**
-- Currently returns refusal message (hard trust rule: no source = no answer)
+- Returns refusal message (hard trust rule: no source = no answer)
 - Logs audit event with prompt hash
-- Will be replaced with Vertex AI Search integration
+- Will be replaced with Vertex AI Search search/answer API
+
+#### Trigger Indexing
+```http
+POST /docs/index
+Content-Type: application/json
+
+{}
+```
+or `{"doc_id": 1}` to index a specific document.
+
+**Response:** `request_id`, `triggered`, `succeeded`, `failed`, `details[]` (per-doc status).
+
+**Functionality:** Indexes PENDING docs with `gs://` URIs into Vertex AI Search; updates `indexed_status` to READY or FAILED.
 
 #### GCS Smoke Test
 ```http
@@ -131,8 +144,8 @@ GET /gcs/smoke
 ```json
 {
   "ok": true,
-  "bucket": "sme-ops-center-uploads-sme-ai-prototype",
-  "object": "smoke/7ac7d93b-ebb6-4c2e-9dea-07bc22118ae3.txt",
+  "bucket": "<GCS_BUCKET_NAME from .env>",
+  "object": "smoke/<uuid>.txt",
   "request_id": "uuid"
 }
 ```
@@ -151,7 +164,6 @@ GET /gcs/smoke
 
 ### Future Endpoints (Not Yet Implemented)
 
-- `POST /docs/index` - Trigger document indexing
 - `POST /inbox/upload` - Upload email for triage (Module B)
 - `POST /inbox/process/{id}` - Process email (Module B)
 - `GET /inbox/queue` - Get inbox queue (Module B)
@@ -265,16 +277,17 @@ When the service is running, visit:
 - `MCP_BRIDGE_URL` - MCP Bridge service URL (default: http://mcp-bridge:3000)
 - `UPLOADS_DIR` - Directory for uploaded files (default: /app/uploads)
 - `CORS_ORIGINS` - Allowed CORS origins (default: http://localhost:8501)
-- `GOOGLE_APPLICATION_CREDENTIALS` - Path to GCP service account JSON file (default: /run/secrets/gcp-sa.json)
-- `GCS_BUCKET_NAME` - Google Cloud Storage bucket name (required for GCS operations)
-- `STORAGE_BACKEND` - Storage backend: `local` or `gcs` (configured in `.env`)
+- `GOOGLE_APPLICATION_CREDENTIALS` - Path to GCP service account JSON (default: /run/secrets/gcp-sa.json)
+- `GCS_BUCKET_NAME` - GCS bucket name (from `.env`; required when `STORAGE_BACKEND=gcs`)
+- `STORAGE_BACKEND` - `local` or `gcs` (from `.env`)
+- `GOOGLE_CLOUD_PROJECT`, `DATA_STORE_ID`, `DISCOVERY_ENGINE_LOCATION` - Required for Vertex AI Search document import
 
 ### Volume Mounts
 
 - `./api-gateway:/app` - Source code (development)
 - `uploads:/app/uploads` - Named volume for file persistence
 - `sessions:/app/sessions` - Named volume for session data
-- `E:\sme-ops-center-secrets\smeops-api-sa.json:/run/secrets/gcp-sa.json:ro` - GCP service account credentials (read-only)
+- `./secrets/aiops-gc-poc-pilot__aiops-gc-app-key.json:/run/secrets/gcp-sa.json:ro` - GCP service account credentials (read-only; from GC-Build.ps1)
 
 ## Security
 
@@ -330,14 +343,10 @@ The API Gateway supports Google Cloud Storage for document storage. This is conf
 
 ### Setup
 
-1. **Create a GCS bucket** (e.g., `sme-ops-center-uploads-sme-ai-prototype`)
-2. **Create a GCP service account** with Storage Object Admin permissions
-3. **Download the service account JSON key**
-4. **Place the key file** at `E:\sme-ops-center-secrets\smeops-api-sa.json`
-5. **Set environment variables**:
-   - `GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-sa.json` (already configured in docker-compose.yml)
-   - `GCS_BUCKET_NAME=sme-ops-center-uploads-sme-ai-prototype` (already configured in docker-compose.yml)
-   - `STORAGE_BACKEND=gcs` (set in `.env` file)
+1. **Run `.\Scripts\GC-Build.ps1`** to create project, bucket, service account, and key (saved to `secrets/`)
+2. **Set `.env`**: `STORAGE_BACKEND=gcs`, `GCS_BUCKET_NAME=<bucket from gc-foundation.json>`, `GOOGLE_CLOUD_PROJECT`, `DATA_STORE_ID`, `ENGINE_ID`
+3. **Credentials**: Mounted from `./secrets/aiops-gc-poc-pilot__aiops-gc-app-key.json` (docker-compose); `GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-sa.json`
+4. **Vertex AI Search**: Create data store with import prefix `gs://<bucket>/docs/`; run `GC-Fix-DiscoveryEngine-Permissions.ps1` if connector fails
 
 ### Testing
 

@@ -392,16 +392,16 @@ Redis is **not** a system of record. It is queue/caching only.
 APP_ENV=local
 APP_REGION=africa-south1
 API_BASE_URL=http://api-gateway:8000
-STORAGE_BACKEND=local   # local|gcs
+STORAGE_BACKEND=gcs    # gcs required for Vertex AI Search document ingestion; use local for dev without GCS
 
 # GCP / Vertex
 GOOGLE_CLOUD_PROJECT="your-project-id"
 GOOGLE_GENAI_USE_VERTEXAI=True
 VERTEX_LOCATION="global"              # or your chosen Vertex GenAI location
 DISCOVERY_ENGINE_LOCATION="global"    # Vertex AI Search location (commonly global)
-GCS_BUCKET_NAME="sme-ops-center-uploads"
+GCS_BUCKET_NAME="your-bucket-name"    # From GC-Build.ps1 (e.g. aiops-gc-poc-pilot-uploads-xxxxxx)
 
-# Vertex AI Search / Discovery Engine (from console Steps 13-15)
+# Vertex AI Search / Discovery Engine (from console Steps 13-15; data store import prefix gs://bucket/docs/)
 DATA_STORE_ID="your-data-store-id"
 ENGINE_ID="your-engine-id"
 

@@ -78,13 +78,18 @@ The script outputs all created resources. You still need to complete these **man
 
 2. **Create Vertex AI Search resources** (console-driven):
    - See Steps 13–16 in the checklist below
-   - Create datastore and search app
+   - Create datastore with import prefix `gs://<bucket>/docs/`
    - Capture `DATA_STORE_ID` and `ENGINE_ID`
+   - If you see "Missing required permissions: storage.objects.get", run `.\Scripts\GC-Fix-DiscoveryEngine-Permissions.ps1`
 
-3. **Run final verification**:
+3. **Optional — additional data stores**: Run `.\Scripts\GC-Create-DataStores.ps1` to create Operations, Compliance, and Finance buckets; use a `docs/` folder per bucket when creating datastores.
+
+4. **Optional — region check**: Run `.\Scripts\GC-Validate-Regions.ps1` to validate GCS, Vertex, and Discovery Engine region compatibility.
+
+5. **Run final verification**:
    - See Step 19 in the checklist below
 
-**State file location**: `secrets/gc-foundation.json` contains all foundation values (project ID, bucket, service account, etc.) ready for your handoff pack.
+**State file location**: `secrets/gc-foundation.json` contains all foundation values. Additional buckets: `secrets/datastores-config.json`.
 
 ### Troubleshooting
 
@@ -362,19 +367,26 @@ Command equivalent:
 gsutil iam ch "serviceAccount:$SA_EMAIL:roles/storage.objectAdmin" "gs://$BUCKET"
 ```
 
-### B) Discovery Engine service agent (only if Search ingests from bucket; required for some setups)
-Grant (bucket-level):
-- `roles/storage.objectViewer`
+### B) Discovery Engine service agent (required for Vertex AI Search connector)
+Grant (bucket-level) **`roles/storage.objectAdmin`** (includes `storage.objects.get`; objectViewer can be insufficient for connector operations):
 
-Command equivalent:
 ```bash
 PROJECT_NUMBER=$(gcloud projects describe "$(gcloud config get-value project)" --format="value(projectNumber)")
 DE_SA="service-$PROJECT_NUMBER@gcp-sa-discoveryengine.iam.gserviceaccount.com"
-gsutil iam ch "serviceAccount:$DE_SA:roles/storage.objectViewer" "gs://$BUCKET"
+gcloud storage buckets add-iam-policy-binding "gs://$BUCKET" --member "serviceAccount:$DE_SA" --role roles/storage.objectAdmin
 ```
 
-**Expected output:** `gsutil iam get gs://<bucket>` shows bindings  
-**Fail symptoms:** Vertex AI Search import fails due to bucket access
+### C) Project-level: Discovery Engine service agent (for connector bucket create)
+Connector may need `storage.buckets.create`. Grant project-level **`roles/storage.admin`**:
+
+```bash
+gcloud projects add-iam-policy-binding "$(gcloud config get-value project)" --member "serviceAccount:$DE_SA" --role roles/storage.admin
+```
+
+**Note:** `Scripts/GC-Build.ps1` applies both B and C. If you create datastores from the console and see "Missing required permissions: storage.objects.get", run `Scripts/GC-Fix-DiscoveryEngine-Permissions.ps1` (grants console user objectViewer on buckets as well).
+
+**Expected output:** IAM bindings show DE_SA with objectAdmin on bucket and storage.admin on project  
+**Fail symptoms:** Vertex AI Search connector "Failed"; storage.objects.get / storage.buckets.create errors in logs
 
 ---
 

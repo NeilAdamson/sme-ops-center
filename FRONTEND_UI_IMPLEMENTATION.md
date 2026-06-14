@@ -228,10 +228,11 @@ Add lightweight "Request ID" panel showing last `request_id` for upload, status,
 
 ## Next Steps
 
-1. **Vertex AI Search Integration** (Milestone 1 remaining):
-   - Replace query stub with actual Vertex AI Search retrieval
+1. **Vertex AI Search Query Integration** (Milestone 1 remaining):
+   - Replace query stub with Vertex AI Search search/answer API
    - Display real citations from search results
-   - Update status display when documents are indexed
+   - Status already shows indexed_status (pending/indexing/ready/failed); backend triggers import on upload when GCS is used
+2. **Optional:** Add UI to trigger `POST /docs/index` for re-indexing PENDING docs (e.g. "Index now" button on Status tab)
 
 2. **Additional Trust Surfaces**:
    - Expand Request ID panel to show timestamp

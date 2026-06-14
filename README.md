@@ -36,9 +36,9 @@ cp .env.example .env
    **Data Store import prefix:** When creating the Vertex AI Search Data Store, set the import prefix to `gs://<bucket>/docs/` so it matches where the app uploads documents.
 
 4. **Configure Google Cloud Storage credentials:**
-   - Place your GCP service account JSON file at `E:\sme-ops-center-secrets\smeops-api-sa.json`
-   - The file will be automatically mounted to the `api-gateway` container at `/run/secrets/gcp-sa.json` (read-only)
-   - Set `GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-sa.json` in `.env` (already configured in docker-compose.yml)
+   - Run `.\Scripts\GC-Build.ps1` to create the project and generate a dev key, or place your GCP service account JSON in `secrets/`
+   - The key file is mounted as `./secrets/aiops-gc-poc-pilot__aiops-gc-app-key.json` → `/run/secrets/gcp-sa.json` (read-only) in the api-gateway container
+   - Ensure `GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-sa.json` (set via docker-compose)
 
 5. **Start all services:**
 ```bash
@@ -132,10 +132,60 @@ See [MILESTONE1_STATUS.md](./MILESTONE1_STATUS.md) for detailed status.
 - **Milestone 3**: Module C - Xero Finance Lens with read-only MCP
 - **Milestone 4**: Demo hardening
 
+## GCP Setup Scripts
+
+### GC-Build.ps1 — Foundation Setup
+Creates the base GCP infrastructure (project, service account, APIs, main bucket).
+
+```powershell
+.\Scripts\GC-Build.ps1
+```
+
+### GC-Create-DataStores.ps1 — Additional Data Stores
+Creates additional GCS buckets and Vertex AI Search data stores for:
+- **Operations** — SOPs, manuals, procedures
+- **Compliance/Legal** — Policies, contracts  
+- **Finance** — Tax, accounting documents
+
+**Prerequisites:** Run `GC-Build.ps1` first.
+
+```powershell
+.\Scripts\GC-Create-DataStores.ps1
+```
+
+This enables module-specific data stores aligned with the PRD's modular structure (Module A vs Module C), allowing code to filter queries by functional area.
+
+**After running:** Create Vertex AI Search data stores via console (script provides instructions). Use a `docs/` folder per bucket (e.g. `gs://bucket-name/docs/`) and update `secrets/datastores-config.json` with `DATA_STORE_ID` values.
+
+### GC-Fix-DiscoveryEngine-Permissions.ps1 — Fix Connector Permissions
+If Vertex AI Search connector fails or you see "Missing required permissions: storage.objects.get" when creating a data store, run:
+
+```powershell
+.\Scripts\GC-Fix-DiscoveryEngine-Permissions.ps1
+```
+
+This grants the Discovery Engine service agent project-level `storage.admin` and bucket-level `storage.objectAdmin`, and grants your console user `storage.objectViewer` on each bucket so the Vertex AI console can validate the GCS path.
+
+### GC-Validate-Regions.ps1 — Region Compatibility Check
+Validates that all GCP resources are in compatible regions and can connect to each other. Identifies cross-region issues that could cause access problems.
+
+```powershell
+.\Scripts\GC-Validate-Regions.ps1
+```
+
+**What it checks:**
+- GCS bucket regions vs Discovery Engine location
+- Vertex AI location compatibility
+- Connectivity between resources
+- Provides recommendations for optimal region configuration
+
+**Note:** Using `global` endpoints for Vertex AI and Discovery Engine while keeping GCS buckets in `africa-south1` is recommended for data residency compliance while maintaining full feature access.
+
 ## Documentation
 
 - **[Product Requirements Document (PRD)](./docs/PRD.md)** - Complete specification
 - **[Architecture Rules](./.cursor/rules/architecture.mdc)** - Development guidelines
+- **[GCP Prerequisite Checklist](./docs/Operational_AI_for_SMEs_GCP_Prereq_Checklist_AIOPS_Naming.md)** - Manual GCP setup and script reference
 - **[Milestone 0 Status](./MILESTONE0_STATUS.md)** - Docker Compose scaffold status
 - **[Milestone 1 Status](./MILESTONE1_STATUS.md)** - Module A APIs status (in progress)
 - **[Frontend UI Implementation](./FRONTEND_UI_IMPLEMENTATION.md)** - Frontend UI implementation summary
@@ -149,22 +199,25 @@ See [MILESTONE1_STATUS.md](./MILESTONE1_STATUS.md) for detailed status.
 sme-ops-center/
 ├── docker-compose.yml      # Service orchestration
 ├── .env.example            # Environment template
+├── secrets/                # GCP keys and config (gitignored); gc-foundation.json, datastores-config.json
+├── Scripts/                # GCP setup and validation
+│   ├── GC-Build.ps1        # Foundation (project, bucket, SA, IAM)
+│   ├── GC-Create-DataStores.ps1   # Operations, Compliance, Finance buckets
+│   ├── GC-Fix-DiscoveryEngine-Permissions.ps1
+│   └── GC-Validate-Regions.ps1
 ├── frontend/               # Streamlit UI
-│   ├── app.py             # Main UI application
-│   ├── utils.py           # API client utilities
-│   └── requirements.txt   # Python dependencies
+│   ├── app.py              # Main UI application
+│   ├── utils.py            # API client utilities
+│   └── requirements.txt    # Python dependencies
 ├── api-gateway/            # FastAPI backend
 │   ├── app/                # Application code
-│   │   ├── routes/         # API routes
-│   │   │   ├── docs.py     # Module A routes
-│   │   │   └── gcs.py      # GCS smoke test routes
+│   │   ├── routes/         # API routes (docs, gcs)
 │   │   ├── models.py       # Database models
 │   │   ├── schemas.py      # Pydantic schemas
-│   │   └── services.py     # Business logic
+│   │   └── services.py     # Business logic (GCS, Discovery Engine import)
 │   └── migrations/         # Alembic migrations
 ├── worker/                 # Background jobs
 ├── mcp-bridge/             # Node.js MCP server
-├── db/                     # Database migrations (legacy)
 └── docs/                   # Documentation
 ```
 
@@ -207,7 +260,7 @@ API Gateway automatically runs database migrations on startup (via `app/migratio
 - Source code is bind-mounted for development (`./service:/app`)
 - `mcp-bridge` uses anonymous volume for `node_modules` to preserve dependencies
 - Named volumes (`pgdata`, `uploads`, `sessions`, `redis-data`) persist across rebuilds
-- `api-gateway` mounts GCP service account credentials: `E:\sme-ops-center-secrets\smeops-api-sa.json:/run/secrets/gcp-sa.json:ro`
+- `api-gateway` mounts GCP credentials from `./secrets/aiops-gc-poc-pilot__aiops-gc-app-key.json` to `/run/secrets/gcp-sa.json` (read-only)
 
 ## Troubleshooting
 
