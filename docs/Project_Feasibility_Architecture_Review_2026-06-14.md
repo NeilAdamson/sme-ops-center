@@ -21,7 +21,8 @@ Recommended direction:
 - Keep `api-gateway` as the policy, approval, audit, and orchestration boundary.
 - Keep the frontend thin and replaceable.
 - Treat MCP and business-system connectors as untrusted integration boundaries, not as direct model capabilities.
-- Introduce a provider-neutral agent/retrieval abstraction so the product can run on Google, OpenAI, or Microsoft depending on the SME's stack, cost, residency, and security requirements.
+- Retain provider-neutral agent/retrieval interfaces as an architecture principle, but defer implementation until a second real customer profile requires it.
+- Lock the first implementation profile to `gcp-sa`: Xero plus Google/GCP, with app and document storage in South Africa where feasible and AI/search endpoints set explicitly.
 
 ## Current Feasibility
 
@@ -37,7 +38,7 @@ The highest-risk area is not model quality. It is the controlled movement of bus
 | --- | --- | --- |
 | Module A - Ask Your Business | High | Managed RAG/search is mature enough. The project has upload, storage, indexing, and status plumbing. Query/citation generation is still missing. |
 | Module B - Inbox Triage | High | Structured extraction, validation, and draft workflows are straightforward. The key is human approval, audit, and clear non-autonomous behavior. |
-| Module C - Xero Finance Lens | Medium-high | Xero API/OAuth is a viable integration route. Treat any Xero MCP server as custom or explicitly vendor-verified before relying on it. Enforce read-only tools at the gateway. |
+| Module C - Xero Finance Lens | Medium-high | Xero API/OAuth is viable, and the official `XeroAPI/xero-mcp-server` exists. The gateway read-only allow-list remains non-negotiable because the server exposes write-capable tools. |
 | Production SME deployment | Medium-high | Feasible with hosted cloud services, but POPIA, data residency, operator contracts, access controls, and incident processes must be designed explicitly. |
 
 ## What Has Changed Since The PRD
@@ -51,6 +52,7 @@ Implication for this project:
 - OpenAI can now be a first-class runtime option.
 - A future architecture should support a runtime provider interface: `OpenAI`, `Google Vertex/Gemini`, and potentially `Microsoft Foundry/Azure OpenAI`.
 - The gateway should own approvals and tool execution policy rather than delegating that fully to the model runtime.
+- Do not implement OpenAI/Microsoft adapters during the `gcp-sa` execution cycle; keep them as future profiles until a second customer profile is real.
 
 Sources:
 
@@ -70,12 +72,13 @@ Implication for this project:
 - Maintain an allow-list per tenant, per module, and per role.
 - Log inputs and outputs for every tool call.
 - Prefer official/vendor-hosted MCP servers where available.
-- For Xero, verify whether an official Xero MCP server exists before depending on it; otherwise build a small read-only Xero adapter around the official API.
+- For Xero, use the official `XeroAPI/xero-mcp-server` behind the gateway. Enforce read-only operations at the gateway because the MCP server includes write-capable features such as invoice creation and contact management.
 
 Sources:
 
 - [OpenAI MCP and connectors security notes](https://developers.openai.com/api/docs/guides/tools-connectors-mcp)
 - [Microsoft Power Platform data policies and MCP connectors](https://learn.microsoft.com/en-us/power-platform/admin/wp-data-loss-prevention)
+- [XeroAPI/xero-mcp-server](https://github.com/XeroAPI/xero-mcp-server)
 - [Xero OAuth 2.0 documentation](https://developer.xero.com/documentation/guides/oauth2/overview/)
 - [Xero Accounting API documentation](https://developer.xero.com/documentation/api/accounting/overview)
 
@@ -185,14 +188,14 @@ flowchart LR
 
 ### Architecture Principles To Add
 
-- Provider-neutral interfaces for model, retrieval, and tool execution.
+- Provider-neutral interfaces for model, retrieval, and tool execution. Implementation is deferred until a second customer profile is real.
 - Tenant-aware auth, RBAC, and data isolation.
 - Tool-call approval policy at the gateway.
 - Explicit egress policy for model and connector calls.
 - Prompt/tool input-output logging with sensitive field controls.
 - Evaluation datasets for refusal behavior, citations, extraction quality, and finance query correctness.
 - Connector risk rating: official, customer-owned, vetted third-party, untrusted.
-- Deployment profiles: `local-demo`, `gcp-sa`, `gcp-eu-ai`, `azure-sa`, `m365-low-code`.
+- Deployment profiles: implement `gcp-sa` first; keep `local-demo`, `gcp-eu-ai`, `azure-sa`, and `m365-low-code` as future profiles.
 
 ## Current Project Progress
 
@@ -237,24 +240,27 @@ flowchart LR
 
 ## Recommended Next Steps
 
-### Phase 1 - Rebaseline The Product Direction
+### Sprint 0 - Doc Rebaseline
 
-1. Update `docs/PRD.md` to clarify the product runtime and provider profiles.
-2. Rename the concept from "GCP demo-in-a-box" to "SME AI control plane" or similar.
-3. Add provider profiles: Google-first, Microsoft-first, OpenAI-first, and local-demo.
-4. Decide the first target customer stack: Xero plus Google Workspace, or Xero plus Microsoft 365.
-5. Add a POPIA processing and cross-border transfer appendix.
+1. Update PRD and README to position the product as an SME AI control plane.
+2. Lock the first profile to `gcp-sa`: Xero plus Google/GCP.
+3. Add the POPIA and residency statement: app/docs in `africa-south1` where feasible; AI/search at documented `global` endpoints unless changed.
+4. State provider-neutral adapters are deferred until a second customer profile is real.
 
-### Phase 2 - Finish Module A Properly
+### Sprint 1 - Module A Query
 
 1. Replace `/docs/query` stub with real retrieval and citation extraction.
 2. Use Google Agent Search grounded generation if available in the project; otherwise use search results plus a model answer step.
 3. Enforce citation threshold, refusal text, and evidence panel behavior in backend tests.
-4. Move import/index jobs to the worker with retry/backoff.
-5. Add soft delete, reindex, and source export endpoints.
-6. Add a small demo corpus and repeatable acceptance prompts.
+4. Add a small demo corpus and repeatable acceptance prompts.
 
-### Phase 3 - Add Security Baseline Before More Modules
+### Sprint 2 - Worker + Doc Lifecycle
+
+1. Move import/index jobs to the worker with retry/backoff.
+2. Add soft delete, reindex, and source export endpoints.
+3. Fix Compose secrets portability.
+
+### Sprint 3 - Security Baseline
 
 1. Add authentication, tenant IDs, roles, and per-tenant storage prefixes.
 2. Add environment validation at startup.
@@ -262,16 +268,18 @@ flowchart LR
 4. Add audit browse/export endpoints.
 5. Add tool-call ledger tables before implementing Xero.
 6. Add egress and connector allow-list configuration.
+7. Treat this sprint as the gate before live finance integration.
 
-### Phase 4 - Build The Integration Gateway
+### Sprint 4 - Module C Xero
 
 1. Replace `mcp-bridge` health stub with a controlled internal tool gateway.
 2. Implement tool registry, pinned schemas, allow-list, and deny-by-default policy.
 3. Add Xero OAuth and encrypted token storage.
-4. Start with direct Xero API read-only operations or a verified official Xero MCP server.
+4. Run the official `XeroAPI/xero-mcp-server` behind the read-only gateway.
 5. Return drill-down records for every finance answer.
+6. Add CSV export for finance drill-down rows.
 
-### Phase 5 - Build Module B
+### Sprint 5 - Module B Inbox
 
 1. Add `email_asset` and approval tables.
 2. Implement upload, parse, classify, extract, validate, approve/reject routes.
@@ -279,24 +287,23 @@ flowchart LR
 4. Add UI queue and approval screens.
 5. Keep outputs draft-only.
 
-### Phase 6 - Production Readiness
+### Sprint 6 - Production Hardening
 
 1. Add eval tests for citation accuracy, refusal behavior, extraction quality, and finance query correctness.
 2. Add threat modeling for prompt injection, connector misuse, and data exfiltration.
-3. Add deployment profiles for GCP and Microsoft.
-4. Add customer onboarding checklist: data classes, systems connected, region choices, operator agreements, retention policy.
-5. Add observability: request traces, model/tool latency, cost, error rates, approval outcomes.
+3. Add customer onboarding checklist: data classes, systems connected, region choices, operator agreements, retention policy.
+4. Add observability: request traces, model/tool latency, cost, error rates, approval outcomes.
+5. Add guided demo mode.
 
 ## Immediate Engineering Recommendation
 
 Do not start Module B or Module C yet. Finish Module A to a credible, evidence-backed demo first, then add security baseline, then build Xero read-only integration.
 
-The fastest credible next sprint is:
+The fastest credible next sprint is Sprint 1 - Module A Query:
 
-1. Update PRD with this revised 2026 direction.
-2. Implement `/docs/query` against the selected retrieval path.
+1. Implement `/docs/query` against Google Agent Search grounded generation.
+2. Add citation extraction and refusal behavior.
 3. Add backend tests for refusal and citation behavior.
-4. Move indexing to the worker.
-5. Add basic auth and tenant fields before any live finance connector work.
+4. Add the demo corpus and canned prompts.
 
 This preserves momentum while reducing the risk that the prototype becomes a collection of disconnected demos rather than a safe LoB AI platform.

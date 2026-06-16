@@ -1,10 +1,12 @@
-# Operational AI Demo-in-a-Box (SA SME)
+# SME AI Control Plane (SA SME)
 
-## Final Architecture + PRD + Requirements + Tech Spec (Cursor Build Pack)
+## Product Requirements, Architecture, and Technical Specification
 
 ### Document purpose
 
-A single build specification for Cursor/Antigravity to implement a **Dockerised, decoupled**, production-reusable prototype using **Google Gemini on Vertex + Vertex AI Search + Xero via MCP**, with **trust controls** (citations, approvals, read-only finance), **auditability**, and **incremental delivery**. The initial **Streamlit “demo shell”** must be replaceable later by **Node/Next.js UI** without rewriting backend logic.
+A single product and technical specification for a **Dockerised, decoupled**, production-reusable SME AI control plane using the first implementation profile, **`gcp-sa`**: Google/GCP runtime, Google Gemini on Vertex, Vertex AI Search / Agent Search, and Xero via the official MCP server behind gateway controls.
+
+The product must provide **trust controls** (citations, approvals, read-only finance), **auditability**, and **incremental delivery**. The initial **Streamlit demo shell** must be replaceable later by **Node/Next.js UI** without rewriting backend logic.
 
 ---
 
@@ -33,10 +35,19 @@ Deliver a **visual, product-like demo** in a browser that proves value in minute
 * No full email integration (MVP is upload-based only; connectors later).
 * No ERP/CRM reimplementation; no full data warehouse; no master data remediation.
 * No guarantee of “AI processing in South Africa only” (some managed AI/search capabilities may require global/EU endpoints depending on service availability). Host the app/infra in Johannesburg where feasible; treat endpoint location as a compliance design choice.
+* No provider abstraction implementation in the first execution cycle. Provider-neutral interfaces remain an architecture principle, but OpenAI/Microsoft adapters are deferred until a second real customer profile requires them.
 
 ---
 
 ## 3) Key decisions (must be enforced)
+
+### 3.0 First implementation profile: `gcp-sa`
+
+* First target customer profile is **Xero + Google/GCP**.
+* App infrastructure and original document storage should use **`africa-south1`** where feasible.
+* Vertex AI Search / Agent Search and AI inference may use documented **`global`** endpoints unless a later service capability or compliance decision changes this.
+* Customer onboarding must disclose that documents can be stored in South Africa while AI/search processing may occur through global managed endpoints.
+* Future profiles (`gcp-eu-ai`, `azure-sa`, `m365-low-code`, OpenAI-first) are documentation/planning concepts only until a second customer profile is real.
 
 ### 3.1 Stack decisions (MVP)
 
@@ -45,7 +56,7 @@ Deliver a **visual, product-like demo** in a browser that proves value in minute
 
   * **No deprecated model versions.** Do not reference Gemini 1.5.
   * Use configurable model IDs: primary + fallback.
-* **Finance integration:** Xero via MCP server running behind an MCP bridge/proxy
+* **Finance integration:** official `XeroAPI/xero-mcp-server` running behind an MCP bridge/proxy
 * **UI:** Streamlit initially (thin client only)
 * **Backend:** API-first (FastAPI recommended)
 * **Async processing:** Worker service + Redis queue (ingestion/indexing/email parsing)
@@ -200,12 +211,12 @@ Schema (minimum):
 
 **Integration**
 
-* `mcp-bridge` runs the Xero MCP server.
+* `mcp-bridge` runs the official `XeroAPI/xero-mcp-server`.
 * `api-gateway` calls `mcp-bridge` over internal HTTP.
 * Enforce **deny-by-default tool policy** at the gateway:
 
   * allow-list read-only actions only
-  * block write-capable tools even if exposed by MCP server
+  * block write-capable tools even though the official MCP server exposes write-capable features
 
 **Query rules (hard trust)**
 
@@ -287,6 +298,13 @@ Redis is **not** a system of record. It is queue/caching only.
   * pin MCP server versions
   * allow-list tools
   * log all tool calls
+
+### 6.8 POPIA and residency posture
+
+* The `gcp-sa` profile should host app infrastructure and original documents in South Africa (`africa-south1`) where feasible.
+* AI/search processing may use documented `global` endpoints for Vertex AI / Agent Search; do not claim South Africa-only AI processing.
+* Customer onboarding must disclose endpoint choices, cross-border processing implications, operator agreements, and retention policy.
+* POPIA controls must include least privilege, audit trail, access controls, data minimisation, and incident handling.
 
 ---
 
@@ -477,39 +495,46 @@ Startup validation must fail-fast if required vars are absent.
 
 ---
 
-## 12) Incremental build milestones (must follow)
+## 12) Six-sprint roadmap (must follow)
 
-### Milestone 0 — Scaffold
+### Sprint 0 — Doc rebaseline
 
-* repo + docker compose boots cleanly
-* API health endpoint
-* Postgres migrations run
-* Audit event write works
-* Streamlit loads and can call API
+* Position product as SME AI control plane.
+* Lock the first implementation profile to `gcp-sa`.
+* Add honest POPIA/residency wording.
+* Keep provider-neutral adapters deferred until a second real customer profile exists.
 
-### Milestone 1 — Module A
+### Sprint 1 — Module A query
 
-* Upload docs → persist → index job → query returns citations or refuses
-* Evidence panel works
-* Index status view works
+* Wire `/docs/query` to Agent Search grounded generation.
+* Extract citations and enforce “no source = no answer”.
+* Add refusal tests, demo corpus, and canned prompts.
 
-### Milestone 2 — Module B
+### Sprint 2 — Worker + doc lifecycle
 
-* Upload email → parse → classify/extract JSON (schema-validated)
-* Approval workflow works end-to-end
-* Draft replies/tasks shown only (no external actions)
+* Move Vertex import to Redis/worker.
+* Add soft delete, reindex, and export.
+* Fix Compose secrets portability.
 
-### Milestone 3 — Module C
+### Sprint 3 — Security baseline
 
-* Xero OAuth via bridge works
-* Finance queries return narrative + drill-down rows
-* Read-only tool allow-list enforced and tested
+* Add auth, tenant IDs, RBAC, env validator, audit browse/export, and tool-call ledger schema.
+* Gate live Xero integration on completion of this sprint.
 
-### Milestone 4 — Demo hardening
+### Sprint 4 — Module C Xero
 
-* Guided demo mode with pre-canned prompts
-* Export CSV (finance) + export answer/citations (docs)
-* Robust error states and status badges
+* Run official `XeroAPI/xero-mcp-server` behind the read-only gateway.
+* Implement OAuth in `mcp-bridge`.
+* Add finance query, drill-down rows, and CSV export.
+
+### Sprint 5 — Module B Inbox
+
+* Add `email_asset`, extraction, approval workflow, and draft-only UI.
+* Keep inbox upload-only; defer IMAP/Graph/email connectors.
+
+### Sprint 6 — Production hardening
+
+* Add eval tests, threat model, observability, onboarding checklist, and guided demo mode.
 
 ---
 
@@ -553,53 +578,4 @@ repo/
       allowlist/
   db/
     migrations/
-  .cursor/
-    rules/
-      architecture.mdc
 ```
-
----
-
-## 14) Cursor rules (`.cursor/rules/architecture.mdc`) — required content
-
-Add a rule file that enforces:
-
-* Docker-only execution
-* UI calls only API (no direct provider/system calls)
-* Strict milestones (no big-bang)
-* No secrets in repo
-* No deprecated model IDs
-* Read-only allow-list for Xero tools
-* Audit logging mandatory per request
-* Persistent volumes for Postgres/uploads/sessions
-
----
-
-## 15) “Interrogate requirements” checklist (Cursor must follow)
-
-Before implementing any feature:
-
-* Identify module + acceptance criteria
-* Identify data needed + where it is persisted
-* Identify API contract impact
-* Identify security implications (secrets, OAuth, audit, tool allow-list)
-* Confirm Dockerisation + restart survival
-* Confirm no deprecated model/package usage
-* Confirm simplest path (MVP first)
-
----
-
-# Copy-paste “Master Cursor Instructions”
-
-> Act as a Senior Lead Architect. Initialize a monorepo `sme-ops-center` with a decoupled microservices architecture.
->
-> 1. Create `docker-compose.yml` defining `frontend` (Streamlit), `api-gateway` (FastAPI), `worker`, `mcp-bridge` (Node), `postgres`, and `redis`, all running as non-root with named volumes for persistence.
-> 2. Enforce decoupling: frontend must only call REST endpoints on `api-gateway`; it must not call GCP, Xero, or Postgres directly.
-> 3. Implement environment validation on startup from `.env` and provide `.env.example`. No secrets committed.
-> 4. Implement Module A using Vertex AI Search with strict grounding and “no source = no answer”.
-> 5. Implement Module B using Gemini on Vertex (no deprecated model IDs) with schema-validated JSON extraction + human approval workflow; generate drafts only.
-> 6. Implement Module C using Xero MCP server behind `mcp-bridge`. OAuth callback must be owned by bridge/gateway (not Streamlit). Enforce read-only tool allow-list and always return drill-down tables.
-> 7. Build incrementally: Milestone 0 → Module A → Module B → Module C → hardening. Do not build everything at once.
-> 8. Generate OpenAPI for `api-gateway` and keep UI replaceable by a future Node/Next.js frontend without backend rewrite.
-
----

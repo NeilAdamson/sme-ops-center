@@ -13,7 +13,10 @@ from app.schemas import (
     DocIndexRequest,
     DocIndexResponse,
     ErrorResponse,
-    Citation
+    Citation,
+    DocDomainResponse,
+    DocMoveRequest,
+    DocMoveResponse,
 )
 from app.services import (
     generate_request_id,
@@ -22,13 +25,17 @@ from app.services import (
     create_doc_asset,
     create_audit_event,
     get_all_docs,
+    get_doc_by_id,
     check_duplicate_filename,
     get_pending_gcs_docs,
     update_doc_indexed_status,
-    trigger_vertex_import,
+    enqueue_index_job,
+    move_doc_to_domain,
+    query_grounded_domains,
     STORAGE_BACKEND,
 )
 from app.models import AuditModule, AuditStatus, IndexedStatus
+from app.domain_registry import get_domain_registry
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +53,24 @@ async def get_storage_config():
     return {
         "storage_backend": STORAGE_BACKEND
     }
+
+
+@router.get("/domains", response_model=DocDomainResponse)
+async def get_doc_domains():
+    """Get staging and domain bucket/search configuration for the UI."""
+    request_id = generate_request_id()
+    registry = get_domain_registry()
+    domains = []
+    for domain in registry["domains"]:
+        item = dict(domain)
+        item["query_ready"] = bool(item.get("serving_config") or item.get("engine_id"))
+        item["index_ready"] = bool(item.get("data_store_id"))
+        domains.append(item)
+    return DocDomainResponse(
+        request_id=request_id,
+        staging=registry["staging"],
+        domains=domains,
+    )
 
 
 @router.post("/upload", response_model=DocUploadResponse)
@@ -75,16 +100,6 @@ async def upload_document(
         
         # Create doc_asset record
         doc_asset = create_doc_asset(db, filename, storage_uri, request_id)
-        
-        # Trigger Vertex AI Search import when using GCS (docs saved to gs://bucket/docs/)
-        if STORAGE_BACKEND == "gcs" and storage_uri.startswith("gs://"):
-            update_doc_indexed_status(db, doc_asset, IndexedStatus.INDEXING)
-            success, err = trigger_vertex_import(storage_uri, request_id)
-            if success:
-                update_doc_indexed_status(db, doc_asset, IndexedStatus.READY, datastore_ref=storage_uri)
-            else:
-                update_doc_indexed_status(db, doc_asset, IndexedStatus.FAILED)
-                logger.warning(f"Vertex import failed for doc_id={doc_asset.id}: {err}")
         
         # Log audit event
         create_audit_event(
@@ -136,9 +151,8 @@ async def trigger_indexing(
     db: Session = Depends(get_db)
 ):
     """
-    Trigger document indexing to Vertex AI Search.
-    Indexes PENDING docs with gs:// storage URIs. Optionally restrict to doc_id.
-    Only applies when STORAGE_BACKEND=gcs; local uploads cannot be indexed.
+    Queue document indexing to Vertex AI Search via the worker.
+    Indexes domain-classified docs with gs:// storage URIs. Optionally restrict to doc_id.
     """
     request_id = generate_request_id()
     doc_id = request.doc_id if request else None
@@ -149,16 +163,14 @@ async def trigger_indexing(
     details = []
 
     for doc in docs:
-        update_doc_indexed_status(db, doc, IndexedStatus.INDEXING)
-        success, err = trigger_vertex_import(doc.storage_uri, request_id)
-        if success:
-            update_doc_indexed_status(db, doc, IndexedStatus.READY, datastore_ref=doc.storage_uri)
+        try:
+            job_id = enqueue_index_job(db, doc, request_id)
             succeeded += 1
-            details.append({"doc_id": doc.id, "filename": doc.filename, "status": "ready", "error": None})
-        else:
-            update_doc_indexed_status(db, doc, IndexedStatus.FAILED)
+            details.append({"doc_id": doc.id, "filename": doc.filename, "status": "indexing", "job_id": job_id, "error": None})
+        except Exception as exc:
+            update_doc_indexed_status(db, doc, IndexedStatus.FAILED, last_error=str(exc))
             failed += 1
-            details.append({"doc_id": doc.id, "filename": doc.filename, "status": "failed", "error": err})
+            details.append({"doc_id": doc.id, "filename": doc.filename, "status": "failed", "error": str(exc)})
 
     create_audit_event(
         db=db,
@@ -176,6 +188,70 @@ async def trigger_indexing(
         failed=failed,
         details=details
     )
+
+
+@router.post("/move", response_model=DocMoveResponse)
+async def move_document_to_domain(
+    request: DocMoveRequest,
+    db: Session = Depends(get_db)
+):
+    """Move a staged document to a selected business-domain bucket."""
+    request_id = generate_request_id()
+    doc = get_doc_by_id(db, request.doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Document {request.doc_id} not found")
+
+    try:
+        source_uri = doc.storage_uri
+        target_uri, job_id = move_doc_to_domain(
+            db=db,
+            doc_asset=doc,
+            domain_name=request.domain,
+            request_id=request_id,
+            archive_staging=request.archive_staging,
+        )
+        create_audit_event(
+            db=db,
+            module=AuditModule.MODULE_A,
+            request_id=request_id,
+            sources_json={
+                "doc_id": doc.id,
+                "domain": request.domain,
+                "source_uri": source_uri,
+                "target_uri": target_uri,
+                "index_job_id": job_id,
+            },
+            status=AuditStatus.SUCCESS,
+        )
+        return DocMoveResponse(
+            request_id=request_id,
+            doc_id=doc.id,
+            domain=request.domain,
+            source_uri=source_uri,
+            target_uri=target_uri,
+            indexed_status=doc.indexed_status.value,
+            index_job_id=job_id,
+            message="Document moved and indexing queued",
+        )
+    except Exception as exc:
+        logger.error(f"Document move failed (request_id: {request_id}): {exc}", exc_info=True)
+        update_doc_indexed_status(db, doc, IndexedStatus.FAILED, last_error=str(exc))
+        create_audit_event(
+            db=db,
+            module=AuditModule.MODULE_A,
+            request_id=request_id,
+            sources_json={"doc_id": doc.id, "domain": request.domain},
+            status=AuditStatus.FAILURE,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=ErrorResponse(
+                request_id=request_id,
+                error="Document move failed",
+                detail=str(exc),
+            ).dict(),
+        )
 
 
 @router.get("/status", response_model=DocStatusResponse)
@@ -199,7 +275,11 @@ async def get_docs_status(
                 "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
                 "indexed_status": doc.indexed_status.value,
                 "storage_uri": doc.storage_uri,
+                "staging_uri": doc.staging_uri,
+                "domain": doc.domain,
                 "datastore_ref": doc.datastore_ref,
+                "index_job_id": doc.index_job_id,
+                "last_error": doc.last_error,
                 "deleted_at": doc.deleted_at.isoformat() if doc.deleted_at else None
             }
             for doc in docs
@@ -247,34 +327,40 @@ async def query_documents(
     db: Session = Depends(get_db)
 ):
     """
-    Query documents (stub implementation).
-    
-    Returns refusal message with empty citations until Vertex AI Search is integrated.
-    Logs audit event.
+    Query domain documents with Agent Search grounded generation.
+    Enforces no-source/no-answer behavior in the API layer.
     """
     request_id = generate_request_id()
     prompt_hash = hash_prompt(request.query)
     
-    # Stub response: refuse if no citations (hard trust rule)
-    answer = "Information not found in internal records."
-    citations = []
-    
     try:
+        result = query_grounded_domains(request.query, request.domain, request_id)
+        citations = [Citation(**citation) for citation in result["citations"]]
+        answer = result["answer"] if citations else "Information not found in internal records."
+
         # Log audit event for the query
         create_audit_event(
             db=db,
             module=AuditModule.MODULE_A,
             request_id=request_id,
             prompt_hash=prompt_hash,
-            sources_json={"query": request.query, "citations_count": len(citations)},
-            status=AuditStatus.SUCCESS,
-            error=None
+            sources_json={
+                "query": request.query,
+                "domain": request.domain,
+                "domains_queried": result["domains_queried"],
+                "citations_count": len(citations),
+                "grounding_score": result["grounding_score"],
+            },
+            status=AuditStatus.SUCCESS if not result.get("errors") else AuditStatus.FAILURE,
+            error="; ".join(result.get("errors", [])) if result.get("errors") else None
         )
         
         return DocQueryResponse(
             request_id=request_id,
             answer=answer,
-            citations=citations
+            citations=citations,
+            domains_queried=result["domains_queried"],
+            grounding_score=result["grounding_score"],
         )
         
     except Exception as e:

@@ -57,6 +57,7 @@ AFTER THE SCRIPT COMPLETES:
 1. Link billing account (if not automated with -BillingAccountId)
 2. Create Vertex AI Search resources via console (Steps 13-16 in checklist)
 3. Run final verification checks (Step 19 in checklist)
+4. Start local Docker stack: .\Scripts\dev-deploy.ps1
 
 State file location: secrets/gc-foundation.json contains all foundation values.
 

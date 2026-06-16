@@ -10,11 +10,13 @@ class Citation(BaseModel):
     snippet: str
     page_or_section: Optional[str] = None
     uri_or_id: Optional[str] = None
+    domain: Optional[str] = None
 
 
 class DocQueryRequest(BaseModel):
     """Request schema for document query."""
     query: str
+    domain: str = "all"
 
 
 class DocQueryResponse(BaseModel):
@@ -22,6 +24,8 @@ class DocQueryResponse(BaseModel):
     request_id: str
     answer: str
     citations: List[Citation] = []
+    domains_queried: List[str] = []
+    grounding_score: Optional[float] = None
 
 
 class DocUploadResponse(BaseModel):
@@ -37,6 +41,32 @@ class DocStatusResponse(BaseModel):
     """Response schema for document status."""
     request_id: str
     documents: List[Dict[str, Any]]
+
+
+class DocDomainResponse(BaseModel):
+    """Response schema for configured document domains."""
+    request_id: str
+    staging: Dict[str, Any]
+    domains: List[Dict[str, Any]]
+
+
+class DocMoveRequest(BaseModel):
+    """Request schema for moving a staged document into a domain bucket."""
+    doc_id: int
+    domain: str
+    archive_staging: bool = True
+
+
+class DocMoveResponse(BaseModel):
+    """Response schema for manual document movement."""
+    request_id: str
+    doc_id: int
+    domain: str
+    source_uri: str
+    target_uri: str
+    indexed_status: str
+    index_job_id: Optional[str] = None
+    message: str
 
 
 class DocIndexRequest(BaseModel):

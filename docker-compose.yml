@@ -33,14 +33,15 @@ services:
       - ./api-gateway:/app
       - uploads:/app/uploads
       - sessions:/app/sessions
-      - ./secrets/aiops-gc-poc-pilot__aiops-gc-app-key.json:/run/secrets/gcp-sa.json:ro
+      - ./secrets:/run/secrets:ro
     environment:
       - DATABASE_URL=postgresql://smeops:change-me@postgres:5432/smeops
       - REDIS_URL=redis://redis:6379/0
       - MCP_BRIDGE_URL=http://mcp-bridge:3000
-      - GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-sa.json
+      - GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/aiops-gc-poc-pilot__aiops-gc-app-key.json
       - GCS_BUCKET_NAME=${GCS_BUCKET_NAME}
       - STORAGE_BACKEND=${STORAGE_BACKEND:-local}
+      - DOC_DOMAIN_REGISTRY_PATH=/run/secrets/domain-registry.json
     depends_on:
       postgres:
         condition: service_healthy
@@ -66,12 +67,16 @@ services:
     volumes:
       - ./worker:/app
       - uploads:/app/uploads
-      - E:\sme-ops-center-secrets:/app/secrets:ro
+      - ./secrets:/run/secrets:ro
     environment:
       - DATABASE_URL=postgresql://smeops:change-me@postgres:5432/smeops
       - REDIS_URL=redis://redis:6379/0
       - API_GATEWAY_URL=http://api-gateway:8000
-      - GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/smeops-api-sa-71ec6a6a2950.json
+      - GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/aiops-gc-poc-pilot__aiops-gc-app-key.json
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
+      - GOOGLE_CLOUD_PROJECT_NUMBER=${GOOGLE_CLOUD_PROJECT_NUMBER:-}
+      - DISCOVERY_ENGINE_LOCATION=${DISCOVERY_ENGINE_LOCATION:-global}
+      - DOC_DOMAIN_REGISTRY_PATH=/run/secrets/domain-registry.json
     depends_on:
       postgres:
         condition: service_healthy

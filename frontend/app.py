@@ -3,7 +3,16 @@ SME Ops-Center Frontend
 Operational AI Demo-in-a-Box
 """
 import streamlit as st
-from utils import upload_document, get_document_status, query_documents, get_storage_config, API_BASE_URL
+from utils import (
+    upload_document,
+    get_document_status,
+    query_documents,
+    get_storage_config,
+    get_doc_domains,
+    move_document,
+    trigger_index,
+    API_BASE_URL,
+)
 from datetime import datetime
 
 st.set_page_config(
@@ -20,6 +29,7 @@ if "current_page" not in st.session_state:
 if "last_request_ids" not in st.session_state:
     st.session_state.last_request_ids = {
         "upload": None,
+        "move": None,
         "status": None,
         "query": None
     }
@@ -89,6 +99,7 @@ def render_docs_page():
         
         upload_id = st.session_state.last_request_ids.get("upload")
         status_id = st.session_state.last_request_ids.get("status")
+        move_id = st.session_state.last_request_ids.get("move")
         query_id = st.session_state.last_request_ids.get("query")
         
         if upload_id:
@@ -104,6 +115,13 @@ def render_docs_page():
         else:
             st.markdown("**Status:**")
             st.caption("_No requests yet_")
+
+        if move_id:
+            st.markdown("**Move:**")
+            st.code(move_id, language=None)
+        else:
+            st.markdown("**Move:**")
+            st.caption("_No requests yet_")
         
         if query_id:
             st.markdown("**Query:**")
@@ -118,7 +136,7 @@ def render_docs_page():
     st.markdown("---")
     
     # Tabs for different operations
-    tab1, tab2, tab3 = st.tabs(["📤 Upload", "📊 Status", "🔍 Query"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📤 Upload", "🗂️ File Manager", "📊 Status", "🔍 Query"])
     
     with tab1:
         st.subheader("Upload Document")
@@ -162,6 +180,81 @@ def render_docs_page():
                             st.json(result)
     
     with tab2:
+        st.subheader("File Manager")
+        st.markdown("Move staged uploads into their business domain bucket before indexing.")
+
+        domains_result = get_doc_domains()
+        status_result = get_document_status()
+
+        if domains_result and "error" not in domains_result:
+            domains = domains_result.get("domains", [])
+            staging = domains_result.get("staging", {})
+            st.caption(f"Staging bucket: `{staging.get('bucket', 'unknown')}`")
+        else:
+            domains = []
+            st.error("Could not load domain configuration.")
+            if domains_result:
+                st.json(domains_result)
+
+        if status_result and "error" not in status_result:
+            documents = status_result.get("documents", [])
+            staged_docs = [
+                doc for doc in documents
+                if not doc.get("domain")
+                and doc.get("indexed_status") in ["staged", "pending", "failed"]
+                and str(doc.get("storage_uri", "")).startswith("gs://")
+            ]
+
+            if not staged_docs:
+                st.info("No staged documents waiting for classification.")
+            elif not domains:
+                st.warning("No target domains are configured.")
+            else:
+                domain_labels = {
+                    domain["display_name"]: domain["domain"]
+                    for domain in domains
+                }
+                for doc in staged_docs:
+                    with st.expander(f"📄 {doc.get('filename')} (ID: {doc.get('id')})"):
+                        st.markdown(f"**Current URI:** `{doc.get('storage_uri')}`")
+                        if doc.get("last_error"):
+                            st.error(doc.get("last_error"))
+                        selected_label = st.selectbox(
+                            "Target domain",
+                            list(domain_labels.keys()),
+                            key=f"domain_select_{doc.get('id')}"
+                        )
+                        archive_staging = st.checkbox(
+                            "Archive staging copy after move",
+                            value=True,
+                            key=f"archive_{doc.get('id')}"
+                        )
+                        target_domain = domain_labels[selected_label]
+                        domain_config = next(
+                            (domain for domain in domains if domain["domain"] == target_domain),
+                            {}
+                        )
+                        if not domain_config.get("data_store_id"):
+                            st.warning("This domain is missing a Data Store ID; move will fail until GCP search assets are provisioned.")
+                        if st.button("Move to domain", type="primary", key=f"move_{doc.get('id')}"):
+                            with st.spinner("Moving document and queueing indexing..."):
+                                result = move_document(doc.get("id"), target_domain, archive_staging)
+                                if result and "error" not in result:
+                                    request_id = result.get("request_id")
+                                    if request_id:
+                                        st.session_state.last_request_ids["move"] = request_id
+                                    st.success("Document moved and indexing queued.")
+                                    st.json(result)
+                                else:
+                                    st.error("Document move failed.")
+                                    if result:
+                                        st.json(result)
+        else:
+            st.error("Could not load document status.")
+            if status_result:
+                st.json(status_result)
+
+    with tab3:
         st.subheader("Document Status")
         st.markdown("View all uploaded documents and their indexing status.")
         
@@ -193,6 +286,8 @@ def render_docs_page():
                                 st.markdown(f"**Document ID:** {doc.get('id')}")
                                 st.markdown(f"**Filename:** {doc.get('filename')}")
                                 st.markdown(f"**Status:** `{doc.get('indexed_status', 'pending')}`")
+                                if doc.get("domain"):
+                                    st.markdown(f"**Domain:** `{doc.get('domain')}`")
                             
                             with col2:
                                 uploaded_at = doc.get('uploaded_at')
@@ -204,9 +299,26 @@ def render_docs_page():
                                     except:
                                         st.markdown(f"**Uploaded:** {uploaded_at}")
                                 st.markdown(f"**Storage URI:** `{doc.get('storage_uri')}`")
+                                if doc.get('staging_uri'):
+                                    st.markdown(f"**Staging URI:** `{doc.get('staging_uri')}`")
                                 
                                 if doc.get('datastore_ref'):
                                     st.markdown(f"**Datastore Ref:** `{doc.get('datastore_ref')}`")
+                                if doc.get('index_job_id'):
+                                    st.markdown(f"**Index Job:** `{doc.get('index_job_id')}`")
+                                if doc.get('last_error'):
+                                    st.error(doc.get('last_error'))
+                                if doc.get("domain") and doc.get("indexed_status") in ["classified", "failed"]:
+                                    if st.button("Queue indexing", key=f"index_{doc.get('id')}"):
+                                        with st.spinner("Queueing indexing job..."):
+                                            index_result = trigger_index(doc.get("id"))
+                                            if index_result and "error" not in index_result:
+                                                st.success("Indexing queued.")
+                                                st.json(index_result)
+                                            else:
+                                                st.error("Indexing queue request failed.")
+                                                if index_result:
+                                                    st.json(index_result)
                 else:
                     st.info("📭 No documents uploaded yet. Use the Upload tab to add documents.")
                     if request_id:
@@ -217,9 +329,21 @@ def render_docs_page():
                 if result:
                     st.json(result)
     
-    with tab3:
+    with tab4:
         st.subheader("Query Documents")
         st.markdown("Ask questions about your uploaded documents.")
+
+        domains_result = get_doc_domains()
+        domain_options = {"All domains": "all"}
+        if domains_result and "error" not in domains_result:
+            for domain in domains_result.get("domains", []):
+                label = domain.get("display_name", domain.get("domain", "")).strip()
+                if not domain.get("query_ready"):
+                    label = f"{label} (not query-ready)"
+                domain_options[label] = domain.get("domain")
+
+        selected_domain_label = st.selectbox("Search scope", list(domain_options.keys()))
+        selected_domain = domain_options[selected_domain_label]
         
         query_text = st.text_area(
             "Enter your question",
@@ -232,7 +356,7 @@ def render_docs_page():
                 st.warning("⚠️ Please enter a question before querying.")
             else:
                 with st.spinner("Querying documents..."):
-                    result = query_documents(query_text.strip())
+                    result = query_documents(query_text.strip(), selected_domain)
                     
                     if result and "error" not in result:
                         request_id = result.get("request_id")
@@ -242,9 +366,14 @@ def render_docs_page():
                         
                         answer = result.get("answer", "")
                         citations = result.get("citations", [])
+                        domains_queried = result.get("domains_queried", [])
                         
                         st.markdown("### Response")
                         st.caption(f"Request ID: `{request_id}`")
+                        if domains_queried:
+                            st.caption(f"Domains queried: `{', '.join(domains_queried)}`")
+                        if result.get("grounding_score") is not None:
+                            st.caption(f"Grounding score: `{result.get('grounding_score')}`")
                         
                         # Display answer
                         st.markdown("#### Answer")
@@ -262,6 +391,8 @@ def render_docs_page():
                             st.success(f"Found {len(citations)} citation(s)")
                             for idx, citation in enumerate(citations, 1):
                                 with st.expander(f"Citation {idx}: {citation.get('doc_name', 'Unknown')}"):
+                                    if citation.get('domain'):
+                                        st.markdown(f"**Domain:** `{citation.get('domain')}`")
                                     st.markdown(f"**Snippet:** {citation.get('snippet', 'N/A')}")
                                     if citation.get('page_or_section'):
                                         st.markdown(f"**Page/Section:** {citation.get('page_or_section')}")

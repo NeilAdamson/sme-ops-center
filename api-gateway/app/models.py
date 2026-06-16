@@ -7,11 +7,15 @@ from app.database import Base
 
 
 class IndexedStatus(str, enum.Enum):
-    """Document indexing status."""
+    """Document lifecycle and indexing status."""
+    STAGED = "staged"
+    CLASSIFIED = "classified"
+    MOVING = "moving"
     PENDING = "pending"
     INDEXING = "indexing"
     READY = "ready"
     FAILED = "failed"
+    ARCHIVED = "archived"
 
 
 class AuditModule(str, enum.Enum):
@@ -37,9 +41,14 @@ class DocAsset(Base):
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String(512), nullable=False, index=True)
     storage_uri = Column(String(1024), nullable=False)  # Path to stored file
+    staging_uri = Column(String(1024), nullable=True)
+    domain = Column(String(64), nullable=True, index=True)
     uploaded_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     indexed_status = Column(SQLEnum(IndexedStatus), default=IndexedStatus.PENDING, nullable=False, index=True)
     datastore_ref = Column(String(512), nullable=True)  # Vertex AI Search datastore reference
+    index_job_id = Column(String(128), nullable=True, index=True)
+    last_error = Column(Text, nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
     def __repr__(self):
