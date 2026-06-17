@@ -243,7 +243,10 @@ def render_docs_page():
                                     request_id = result.get("request_id")
                                     if request_id:
                                         st.session_state.last_request_ids["move"] = request_id
-                                    st.success("Document moved and indexing queued.")
+                                    if result.get("indexing_error"):
+                                        st.warning(result.get("message", "Document moved; indexing needs retry."))
+                                    else:
+                                        st.success("Document moved and indexing queued.")
                                     st.json(result)
                                 else:
                                     st.error("Document move failed.")

@@ -203,7 +203,7 @@ async def move_document_to_domain(
 
     try:
         source_uri = doc.storage_uri
-        target_uri, job_id = move_doc_to_domain(
+        target_uri, job_id, indexing_error = move_doc_to_domain(
             db=db,
             doc_asset=doc,
             domain_name=request.domain,
@@ -220,8 +220,10 @@ async def move_document_to_domain(
                 "source_uri": source_uri,
                 "target_uri": target_uri,
                 "index_job_id": job_id,
+                "indexing_error": indexing_error,
             },
-            status=AuditStatus.SUCCESS,
+            status=AuditStatus.SUCCESS if not indexing_error else AuditStatus.PENDING,
+            error=indexing_error,
         )
         return DocMoveResponse(
             request_id=request_id,
@@ -231,7 +233,8 @@ async def move_document_to_domain(
             target_uri=target_uri,
             indexed_status=doc.indexed_status.value,
             index_job_id=job_id,
-            message="Document moved and indexing queued",
+            indexing_error=indexing_error,
+            message="Document moved and indexing queued" if not indexing_error else "Document moved; indexing needs retry",
         )
     except Exception as exc:
         logger.error(f"Document move failed (request_id: {request_id}): {exc}", exc_info=True)

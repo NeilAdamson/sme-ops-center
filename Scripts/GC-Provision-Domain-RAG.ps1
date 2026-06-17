@@ -86,6 +86,14 @@ function New-ResourceId {
   return ("{0}-{1}-{2}" -f $ProjectId, $Domain, $Suffix).ToLower() -replace "[^a-z0-9_-]", "-"
 }
 
+function Invoke-Gcloud {
+  param([string]$Command)
+  Invoke-Expression $Command
+  if ($LASTEXITCODE -ne 0) {
+    throw "Command failed (exit $LASTEXITCODE): $Command"
+  }
+}
+
 if (-not (Test-Path $RegistryPath)) {
   throw "Domain registry not found: $RegistryPath"
 }
@@ -97,6 +105,15 @@ $location = if ($registry.location) { $registry.location } else { "global" }
 $baseUri = "https://discoveryengine.googleapis.com/v1/projects/$projectId/locations/$location/collections/default_collection"
 
 Write-Host "Provisioning domain RAG resources for project $projectId in $location" -ForegroundColor Cyan
+
+$foundationPath = Join-Path (Split-Path $RegistryPath -Parent) "gc-foundation.json"
+if (Test-Path $foundationPath) {
+  $foundation = Get-Content $foundationPath -Raw | ConvertFrom-Json
+  if ($foundation.SaEmail) {
+    Write-Host "Ensuring app service account can import Discovery Engine documents" -ForegroundColor Cyan
+    Invoke-Gcloud "gcloud projects add-iam-policy-binding $projectId --member `"serviceAccount:$($foundation.SaEmail)`" --role roles/discoveryengine.editor --quiet"
+  }
+}
 
 foreach ($domain in $registry.domains) {
   $domainId = $domain.domain.ToLower()

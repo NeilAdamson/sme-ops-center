@@ -36,7 +36,7 @@ The highest-risk area is not model quality. It is the controlled movement of bus
 
 | Module | Current feasibility | Notes |
 | --- | --- | --- |
-| Module A - Ask Your Business | High | Managed RAG/search is mature enough. The project has upload, storage, indexing, and status plumbing. Query/citation generation is still missing. |
+| Module A - Ask Your Business | High | Managed RAG/search is mature enough. The project now has staging upload, manual domain movement, worker indexing, grounded query, citations, and refusal behavior. |
 | Module B - Inbox Triage | High | Structured extraction, validation, and draft workflows are straightforward. The key is human approval, audit, and clear non-autonomous behavior. |
 | Module C - Xero Finance Lens | Medium-high | Xero API/OAuth is viable, and the official `XeroAPI/xero-mcp-server` exists. The gateway read-only allow-list remains non-negotiable because the server exposes write-capable tools. |
 | Production SME deployment | Medium-high | Feasible with hosted cloud services, but POPIA, data residency, operator contracts, access controls, and incident processes must be designed explicitly. |
@@ -92,7 +92,9 @@ Implication for this project:
 
 - Keep the GCP path viable.
 - Make endpoint and data residency choices explicit in customer onboarding.
-- Store customer documents in a South African bucket where feasible.
+- Store original customer documents in South African buckets where feasible.
+- Use the upload bucket as staging only; use operations, compliance, and finance buckets as the long-term source-of-truth corpora.
+- Keep one Agent Search datastore and one search app/engine per document domain, configured through the domain registry.
 - Treat AI/search processing location as a contractual and risk-design question.
 - Do not claim "AI processing stays in South Africa" unless the selected service actually supports that.
 
@@ -155,6 +157,7 @@ flowchart LR
     API["API Gateway<br/>auth, policy, audit, approvals"]
     Agent["Agent Runtime Adapter<br/>OpenAI Responses/Agents, Vertex Gemini, Microsoft Foundry"]
     Retrieval["Retrieval Adapter<br/>Agent Search, OpenAI File Search, Azure AI Search"]
+    Domains["Document Domain Registry<br/>operations, compliance, finance"]
     Tools["Integration Gateway<br/>MCP, Xero API, email, CRM, ERP"]
     Store["Postgres<br/>tenant metadata, audit, approvals"]
     Object["Object Storage<br/>documents, emails, exports"]
@@ -164,11 +167,13 @@ flowchart LR
     UI --> API
     API --> Agent
     API --> Retrieval
+    API --> Domains
     API --> Tools
     API --> Store
     API --> Object
     API --> Queue
     Agent --> Retrieval
+    Domains --> Retrieval
     Agent --> Tools
     Store --> Sec
     Object --> Sec
@@ -196,6 +201,7 @@ flowchart LR
 - Evaluation datasets for refusal behavior, citations, extraction quality, and finance query correctness.
 - Connector risk rating: official, customer-owned, vetted third-party, untrusted.
 - Deployment profiles: implement `gcp-sa` first; keep `local-demo`, `gcp-eu-ai`, `azure-sa`, and `m365-low-code` as future profiles.
+- Domain-aware document lifecycle: staged upload, manual classification, verified move, worker import, ready-for-query state, and later LLM classification suggestions with human approval.
 
 ## Current Project Progress
 
@@ -204,24 +210,22 @@ flowchart LR
 - Docker Compose scaffold with Streamlit frontend, FastAPI gateway, worker, MCP bridge, Postgres, and Redis.
 - Non-root container posture for application containers.
 - Core `doc_asset` and `audit_event` tables.
-- Module A upload/status/index endpoints.
-- GCS storage path aligned to `docs/` import prefix.
-- Vertex AI Search import trigger path exists.
-- Streamlit Docs UI with upload, status, query tabs, and request ID display.
+- Module A upload/domains/move/status/index/query endpoints.
+- GCS staging bucket plus domain buckets aligned to `docs/` import prefixes.
+- Domain registry for operations, compliance, and finance buckets, Agent Search data stores, search apps, and serving configs.
+- Redis/worker document indexing jobs against Agent Search.
+- Agent Search grounded generation with citation extraction and “no source = no answer” enforcement.
+- Streamlit Docs UI with upload, file manager, status, query tabs, and request ID display.
 - `.gitignore` excludes `.env`, secrets, keys, and local dependency artifacts.
 
 ### Incomplete Or Stubbed
 
-- Module A query endpoint still returns the hard refusal stub.
-- No real citation extraction or grounded answer generation yet.
-- Vertex import is synchronous inside upload/index flows; this should move to worker jobs.
 - No auth, user model, tenant model, or RBAC.
 - No startup configuration validator.
 - No document deletion/reindex workflow despite PRD requirement.
 - No `email_asset`, approval workflow, or Module B routes.
 - No Xero OAuth, token encryption, read-only tool policy, or Module C routes.
 - `mcp-bridge` is currently an Express health stub only.
-- Worker is scaffolded but not performing ingestion or extraction jobs.
 - `docker-compose.yml` still contains local/dev hardcoded database credentials and a host-specific worker secrets mount.
 - Local `.env` and key files exist in the workspace. They are ignored by git, but production design should remove long-lived key-file dependence.
 
@@ -230,8 +234,8 @@ flowchart LR
 | Objective | Status | Gap |
 | --- | --- | --- |
 | Visual product-like browser demo | Partial | Landing and Docs flow exist, but only one working module. |
-| Cited answers over messy docs | Partial | Upload and indexing exist. Query/citations missing. |
-| No source = no answer | Implemented as stub | Correct refusal exists, but retrieval is not connected. |
+| Cited answers over messy docs | Implemented for Module A PoC | Domain documents can be queried through Agent Search with citations. Needs automated tests and demo corpus hardening. |
+| No source = no answer | Implemented in backend | Query endpoint refuses when citations are empty. |
 | Inbox triage with approval | Not started | Needs data model, routes, extraction, validation, approval UI. |
 | Xero finance read-only lens | Not started | Needs OAuth, connector/gateway, read-only allow-list, drill-down tables. |
 | Auditability | Partial | Audit table and events exist for Module A, but no audit UI or full tool-call records. |
@@ -249,14 +253,15 @@ flowchart LR
 
 ### Sprint 1 - Module A Query
 
-1. Replace `/docs/query` stub with real retrieval and citation extraction.
-2. Use Google Agent Search grounded generation if available in the project; otherwise use search results plus a model answer step.
-3. Enforce citation threshold, refusal text, and evidence panel behavior in backend tests.
+1. Keep `/docs/query` wired to Agent Search grounded generation.
+2. Maintain citation extraction and backend refusal behavior.
+3. Add automated tests for citation/refusal behavior.
 4. Add a small demo corpus and repeatable acceptance prompts.
+5. Keep the domain registry as the source of truth for operations, compliance, and finance document corpora.
 
 ### Sprint 2 - Worker + Doc Lifecycle
 
-1. Move import/index jobs to the worker with retry/backoff.
+1. Harden import/index jobs in the worker with retry/backoff and operation polling.
 2. Add soft delete, reindex, and source export endpoints.
 3. Fix Compose secrets portability.
 
@@ -297,13 +302,4 @@ flowchart LR
 
 ## Immediate Engineering Recommendation
 
-Do not start Module B or Module C yet. Finish Module A to a credible, evidence-backed demo first, then add security baseline, then build Xero read-only integration.
-
-The fastest credible next sprint is Sprint 1 - Module A Query:
-
-1. Implement `/docs/query` against Google Agent Search grounded generation.
-2. Add citation extraction and refusal behavior.
-3. Add backend tests for refusal and citation behavior.
-4. Add the demo corpus and canned prompts.
-
-This preserves momentum while reducing the risk that the prototype becomes a collection of disconnected demos rather than a safe LoB AI platform.
+Do not start Module B or Module C yet. Module A now has the core evidence-backed path; the next engineering step is hardening it with automated tests, retries, demo corpus management, and deletion/reindex/export workflows. Then add the security baseline before live Xero integration.

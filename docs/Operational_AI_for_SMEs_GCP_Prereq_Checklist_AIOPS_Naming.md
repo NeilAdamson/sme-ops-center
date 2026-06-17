@@ -76,20 +76,20 @@ The script outputs all created resources. You still need to complete these **man
    - See Step 2–3 in the checklist below
    - Configure budget/alerts
 
-2. **Create Vertex AI Search resources** (console-driven):
+2. **Create Agent Search domain resources**:
    - See Steps 13–16 in the checklist below
-   - Create datastore with import prefix `gs://<bucket>/docs/`
-   - Capture `DATA_STORE_ID` and `ENGINE_ID`
+   - Use `.\Scripts\GC-Provision-Domain-RAG.ps1` to create/verify one datastore and one search app per domain
+   - Capture results in `secrets/domain-registry.json`
    - If you see "Missing required permissions: storage.objects.get", run `.\Scripts\GC-Fix-DiscoveryEngine-Permissions.ps1`
 
-3. **Optional — additional data stores**: Run `.\Scripts\GC-Create-DataStores.ps1` to create Operations, Compliance, and Finance buckets; use a `docs/` folder per bucket when creating datastores.
+3. **Domain buckets**: Operations, Compliance, and Finance buckets are required for the current RAG path. The upload bucket is staging only.
 
 4. **Optional — region check**: Run `.\Scripts\GC-Validate-Regions.ps1` to validate GCS, Vertex, and Discovery Engine region compatibility.
 
 5. **Run final verification**:
    - See Step 19 in the checklist below
 
-**State file location**: `secrets/gc-foundation.json` contains all foundation values. Additional buckets: `secrets/datastores-config.json`.
+**State file location**: `secrets/gc-foundation.json` contains foundation values. Domain RAG values live in `secrets/domain-registry.json`.
 
 ### Troubleshooting
 
@@ -157,13 +157,19 @@ Use a short **clientcode** (3–12 chars, lowercase) and **env** (`pilot` or `pr
    - Bucket name: `aiops-gc-<clientcode>-<env>-uploads-<unique>`
    - `<unique>`: 4–8 lowercase chars/digits, e.g. `k9p3` (you make it up; it just prevents name collisions)
 
-4. **Vertex AI Search resources**
-   - Data Store display name: `AIOPS-GC-<CLIENT>-<ENV>-DOCS`
-   - Search App / Engine display name: `AIOPS-GC-<CLIENT>-<ENV>-SEARCH`
+4. **Agent Search domain resources**
+   - Operations Data Store: `aiops-gc-<clientcode>-<env>-operations-store`
+   - Operations Search App / Engine: `aiops-gc-<clientcode>-<env>-operations-search`
+   - Compliance Data Store: `aiops-gc-<clientcode>-<env>-compliance-store`
+   - Compliance Search App / Engine: `aiops-gc-<clientcode>-<env>-compliance-search`
+   - Finance Data Store: `aiops-gc-<clientcode>-<env>-finance-store`
+   - Finance Search App / Engine: `aiops-gc-<clientcode>-<env>-finance-search`
 
-### Prefix layout inside the bucket (keep stable)
-- `gs://<bucket>/docs/` (Module A source docs)
-- `gs://<bucket>/emails/` (Module B raw email assets)
+### Prefix layout inside buckets (keep stable)
+- `gs://<uploads-bucket>/docs/` (Module A staging uploads only)
+- `gs://<uploads-bucket>/archive/` (archived staging copies after domain move)
+- `gs://<domain-bucket>/docs/` (Module A source-of-truth corpus per domain)
+- `gs://<bucket>/emails/` (Module B raw email assets, future)
 - `gs://<bucket>/smoke/` (smoke tests)
 
 ---
@@ -424,46 +430,52 @@ Record:
 
 # Phase 6 — Module A: Vertex AI Search (Discovery Engine) setup
 
-## Step 13 — Create the Data Store (unstructured docs from Cloud Storage)
+## Step 13 — Create Or Verify Domain RAG Registry
 **Owner:** Cloud Engineer (needs Discovery Engine provisioning rights)  
-**Console path:** Vertex AI Search / Search & Conversation → Data Stores → Create
+**Command equivalent:**
+```powershell
+.\Scripts\GC-Provision-Domain-RAG.ps1
+```
 
 Configuration checklist:
-- Data store type: Unstructured documents
-- Source: Cloud Storage
-- Import prefix: `gs://<bucket>/docs/`
-- Choose and record Search resource location/collection (often `global` resources)
+- `secrets/domain-registry.json` exists
+- Registry includes staging bucket and domains: `operations`, `compliance`, `finance`
+- Each domain has `bucket`, `prefix`, `data_store_id`, `engine_id`, and `serving_config`
+- Domain bucket prefix is `docs/`
+- Discovery Engine location is explicit, currently `global`
+- App service account has `roles/discoveryengine.editor`
 
-**Expected output:** datastore shows “Ready” and document count increases after import  
-**Fail symptoms:** import stuck/failing (usually bucket permissions or bad file pattern)
+**Expected output:** registry contains complete domain resources and can be mounted into Docker as `/run/secrets/domain-registry.json`  
+**Fail symptoms:** missing domains, blank serving configs, APIs return 404, worker import permission errors
 
 ---
 
-## Step 14 — Create the Search App (Engine) and attach the Data Store
+## Step 14 — Verify Data Stores And Search Apps
 **Owner:** Cloud Engineer  
-**Console path:** Vertex AI Search → Apps (Search Apps) → Create
+**Console path:** Vertex AI Search / Agent Search → Data Stores and Search Apps
 
 Configuration checklist:
-- App type: Search (general)
-- Attach data store created above
-- Enable generative answers only if you will enforce “no source = no answer” in your API layer
+- One unstructured Cloud Storage datastore per domain
+- One search app/engine per domain
+- Each domain app has generative answers enabled only when the API enforces citations/refusal
+- Each datastore imports from its domain bucket `docs/` prefix
+- The upload/staging bucket is not used as the long-term searchable corpus
 
-**Expected output:** engine created and has a serving config  
-**Fail symptoms:** cannot attach datastore / datastore not ready
+**Expected output:** operations, compliance, and finance apps each have a serving config  
+**Fail symptoms:** cannot attach datastore, datastore not ready, no serving config, query path returns 404
 
 ---
 
 ## Step 15 — Capture IDs for application configuration (handoff pack)
 **Owner:** Cloud Engineer  
-**Console path:** Search app and datastore detail pages
+**Source:** `secrets/gc-foundation.json` and `secrets/domain-registry.json`
 
 Record these values exactly:
 - `GCP_PROJECT_ID`
-- `GCS_BUCKET_NAME`
+- `GCP_PROJECT_NUMBER`
+- `GCS_BUCKET_NAME` (staging upload bucket)
 - `DISCOVERY_ENGINE_LOCATION` (as created/used by console)
-- `DATA_STORE_ID`
-- `ENGINE_ID`
-- `SERVING_CONFIG_ID` (if shown)
+- For each domain: `domain`, `bucket`, `prefix`, `data_store_id`, `engine_id`, `serving_config`
 
 **Expected output:** completed handoff pack  
 **Fail symptoms:** developers guess IDs, APIs return 404
@@ -475,10 +487,14 @@ Record these values exactly:
 **Console path:** Vertex AI Search → App → Preview
 
 Test:
-- Upload 5–20 documents to `gs://<bucket>/docs/`
-- Ask a question you know the docs answer
+- Upload a PDF through the UI; verify it lands in the staging bucket
+- Move the document to a domain through File Manager
+- Verify the object lands at `gs://<domain-bucket>/docs/<doc_id>/<filename>`
+- Verify the worker imports it and `indexed_status` becomes `ready`
+- Ask a known-answer question against that domain
+- Ask an unknown question and confirm the exact refusal text: `Information not found in internal records.`
 
-**Expected output:** relevant answer and/or retrieved results with references  
+**Expected output:** relevant answer with citations for known-answer query; exact refusal for unknown query  
 **Fail symptoms:** no results → ingestion not complete or permissions wrong
 
 ---
@@ -542,9 +558,9 @@ gsutil ls -b "gs://$BUCKET"
 
 Produce a single page with:
 - `PROJECT_ID` and `PROJECT_NUMBER`
-- `GCS_BUCKET_NAME` + region
+- `GCS_BUCKET_NAME` staging bucket + region
 - Vertex AI strategy: `VERTEX_AI_LOCATION`, Gemini model IDs
-- Vertex AI Search: `DATA_STORE_ID`, `ENGINE_ID`, `SERVING_CONFIG_ID`, location/collection used
+- Agent Search domain registry: per-domain `bucket`, `data_store_id`, `engine_id`, `serving_config`, location/collection used
 - App service account email (`SA_EMAIL`)
 - IAM roles granted (project-level + bucket-level)
 - Verification evidence (paste outputs from Step 11 and Step 19, plus one screenshot of Search preview)

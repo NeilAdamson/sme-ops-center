@@ -52,6 +52,8 @@ Deliver a **visual, product-like demo** in a browser that proves value in minute
 ### 3.1 Stack decisions (MVP)
 
 * **Docs retrieval/grounding:** Vertex AI Search (Discovery Engine / Vertex AI Search)
+* **Docs domain architecture:** upload bucket is staging only; operations, compliance, and finance buckets are the source-of-truth corpora for RAG.
+* **Docs configuration:** use a domain registry with `domain`, `bucket`, `prefix`, `data_store_id`, `engine_id`, and `serving_config`; do not rely on a single global `DATA_STORE_ID`.
 * **LLM:** Gemini on Vertex via `google-genai` SDK
 
   * **No deprecated model versions.** Do not reference Gemini 1.5.
@@ -114,7 +116,18 @@ A cohesive landing page with:
 
 * Upload PDFs (required) + optionally DOCX/TXT.
 * Persist originals across container rebuilds.
-* Index into Vertex AI Search datastore.
+* Uploads land in the staging bucket first.
+* A human manually classifies each staged document into a business domain: `operations`, `compliance`, or `finance`.
+* Domain movement copies the document to `gs://<domain-bucket>/docs/<doc_id>/<filename>`, verifies the target object, then deletes or archives the staging object.
+* Index into the matching domain Agent Search datastore after a successful move.
+
+**Domain registry**
+
+* The domain registry is the authoritative mapping between UI domain names and Google resources.
+* Each registry entry must include `domain`, `display_name`, `bucket`, `prefix`, `data_store_id`, `engine_id`, and `serving_config`.
+* The staging bucket must not be queried as a long-term searchable corpus.
+* Query mode must support a single selected domain and an `all` mode that fans out across domain engines and merges cited answers.
+* LLM classification is deferred until the manual flow works; when added, it must be suggestion-only with confidence and evidence snippets.
 
 **Query behavior (hard trust rule)**
 
@@ -139,7 +152,9 @@ A cohesive landing page with:
 
 **Admin**
 
-* Document list and indexing status (pending/indexing/ready/failed)
+* Document list and lifecycle status (`staged`, `classified`, `moving`, `indexing`, `ready`, `failed`, `archived`)
+* File manager for staged uploads and domain destinations
+* Manual move action from staging into a selected business-domain bucket
 * Delete doc (soft delete) + reindex capability
 
 ---
@@ -355,7 +370,7 @@ Redis is **not** a system of record. It is queue/caching only.
   * id, ts, module, user_id/session_id, request_id, prompt_hash, sources_json, tool_calls_json, decision_json, status, error
 * `doc_asset`
 
-  * id, filename, storage_uri, uploaded_at, indexed_status, datastore_ref, deleted_at
+  * id, filename, storage_uri, staging_uri, uploaded_at, domain, indexed_status, datastore_ref, index_job_id, last_error, deleted_at
 * `email_asset`
 
   * id, filename, storage_uri, uploaded_at, parsed_text_ref, classification, extracted_json, approval_status, approver_id, approved_at
@@ -375,11 +390,14 @@ Redis is **not** a system of record. It is queue/caching only.
 ### Module A
 
 * `POST /docs/upload`
+* `GET /docs/domains`
+* `POST /docs/move` → manually classify and move a staged document into a domain bucket
 * `POST /docs/index` (trigger indexing)
 * `GET /docs/status`
-* `POST /docs/query` → returns `{answer, citations[]}`
+* `POST /docs/query` → returns `{answer, citations[], domains_queried, grounding_score}`
 
   * Must refuse if citations are empty.
+  * Must support `domain=<domain>` and `domain=all`.
 
 ### Module B
 
@@ -414,14 +432,18 @@ STORAGE_BACKEND=gcs    # gcs required for Vertex AI Search document ingestion; u
 
 # GCP / Vertex
 GOOGLE_CLOUD_PROJECT="your-project-id"
+GOOGLE_CLOUD_PROJECT_NUMBER="your-project-number"
 GOOGLE_GENAI_USE_VERTEXAI=True
 VERTEX_LOCATION="global"              # or your chosen Vertex GenAI location
 DISCOVERY_ENGINE_LOCATION="global"    # Vertex AI Search location (commonly global)
-GCS_BUCKET_NAME="your-bucket-name"    # From GC-Build.ps1 (e.g. aiops-gc-poc-pilot-uploads-xxxxxx)
+GCS_BUCKET_NAME="your-staging-bucket" # Upload/staging bucket only
+DOC_DOMAIN_REGISTRY_PATH="/run/secrets/domain-registry.json"
 
-# Vertex AI Search / Discovery Engine (from console Steps 13-15; data store import prefix gs://bucket/docs/)
-DATA_STORE_ID="your-data-store-id"
-ENGINE_ID="your-engine-id"
+# Vertex AI Search / Discovery Engine
+# Current flow uses the domain registry, not one global DATA_STORE_ID/ENGINE_ID.
+# Keep DATA_STORE_ID/ENGINE_ID blank unless running legacy single-store scripts.
+DATA_STORE_ID=""
+ENGINE_ID=""
 
 # Vertex AI Search / RAG controls
 DOCS_RELEVANCE_MODE="HIGH"            # or FILTER_SPEC
@@ -509,10 +531,12 @@ Startup validation must fail-fast if required vars are absent.
 * Wire `/docs/query` to Agent Search grounded generation.
 * Extract citations and enforce “no source = no answer”.
 * Add refusal tests, demo corpus, and canned prompts.
+* Add the domain registry and domain-aware query contracts.
 
 ### Sprint 2 — Worker + doc lifecycle
 
 * Move Vertex import to Redis/worker.
+* Add manual staged-to-domain document movement before indexing.
 * Add soft delete, reindex, and export.
 * Fix Compose secrets portability.
 

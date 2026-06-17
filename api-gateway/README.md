@@ -11,7 +11,7 @@ The API Gateway is the single point of entry for all frontend requests. It imple
 - Database persistence (Postgres)
 - Audit logging for all operations
 - File upload handling
-- Service orchestration (Vertex AI, MCP Bridge)
+- Service orchestration (GCS, Redis worker jobs, Agent Search, MCP Bridge)
 
 ## Architecture
 
@@ -71,9 +71,36 @@ file: <file content>
 ```
 
 **Functionality:**
-- Saves file to local volume (`/app/uploads`) or GCS at `gs://bucket/docs/<request_id>/<filename>` when `STORAGE_BACKEND=gcs`
-- When GCS: triggers Vertex AI Search import and updates `indexed_status` (INDEXING → READY or FAILED)
+- Saves file to local volume (`/app/uploads`) or to the GCS staging bucket at `gs://<staging-bucket>/docs/<request_id>/<filename>` when `STORAGE_BACKEND=gcs`
+- GCS uploads are staged only; they are not queryable until moved to a business domain
 - Creates `doc_asset` record; logs audit event
+
+#### Get Document Domains
+```http
+GET /docs/domains
+```
+
+Returns the staging bucket and configured business domains from `DOC_DOMAIN_REGISTRY_PATH`. Each domain includes bucket, prefix, Agent Search datastore, search app/engine, and serving config readiness.
+
+#### Move Document To Domain
+```http
+POST /docs/move
+Content-Type: application/json
+
+{
+  "doc_id": 1,
+  "domain": "compliance",
+  "archive_staging": true
+}
+```
+
+**Functionality:**
+- Copies the staged object to `gs://<domain-bucket>/docs/<doc_id>/<filename>`
+- Verifies the copied object exists
+- Archives or deletes the staging object
+- Updates `doc_asset.domain`, `storage_uri`, `datastore_ref`, and lifecycle status
+- Queues a Redis worker job to import the document into the matching Agent Search datastore
+- If Redis is temporarily unavailable after the copy succeeds, the move still succeeds and returns `indexing_error` so indexing can be retried
 
 #### Get Document Status
 ```http
@@ -89,38 +116,55 @@ GET /docs/status
       "id": 1,
       "filename": "example.pdf",
       "uploaded_at": "2026-01-18T15:00:00Z",
-      "indexed_status": "pending",
-      "storage_uri": "uploads/uuid.pdf",
-      "datastore_ref": null,
+      "indexed_status": "ready",
+      "storage_uri": "gs://aiops-gc-poc-pilot-compliance-hz2xah/docs/7/example.pdf",
+      "staging_uri": null,
+      "domain": "compliance",
+      "datastore_ref": "aiops-gc-poc-pilot-compliance-store",
+      "index_job_id": "uuid",
+      "last_error": null,
       "deleted_at": null
     }
   ]
 }
 ```
 
-#### Query Documents (Stub)
+#### Query Documents
 ```http
 POST /docs/query
 Content-Type: application/json
 
 {
-  "query": "What is our refund policy?"
+  "query": "What is our refund policy?",
+  "domain": "compliance"
 }
 ```
 
-**Response (Stub - until Vertex AI Search query API integrated):**
+Use `"domain": "all"` to fan out across configured domain engines.
+
+**Response:**
 ```json
 {
   "request_id": "uuid",
-  "answer": "Information not found in internal records.",
-  "citations": []
+  "answer": "Grounded answer text...",
+  "citations": [
+    {
+      "doc_name": "example.pdf",
+      "snippet": "Source snippet...",
+      "page_or_section": "2",
+      "uri_or_id": "gs://domain-bucket/docs/7/example.pdf",
+      "domain": "compliance"
+    }
+  ],
+  "domains_queried": ["compliance"],
+  "grounding_score": 1.0
 }
 ```
 
 **Functionality:**
-- Returns refusal message (hard trust rule: no source = no answer)
+- Calls Agent Search grounded generation using the selected domain serving config
+- Returns refusal message when citations are empty (hard trust rule: no source = no answer)
 - Logs audit event with prompt hash
-- Will be replaced with Vertex AI Search search/answer API
 
 #### Trigger Indexing
 ```http
@@ -133,7 +177,7 @@ or `{"doc_id": 1}` to index a specific document.
 
 **Response:** `request_id`, `triggered`, `succeeded`, `failed`, `details[]` (per-doc status).
 
-**Functionality:** Indexes PENDING docs with `gs://` URIs into Vertex AI Search; updates `indexed_status` to READY or FAILED.
+**Functionality:** Queues eligible classified/failed domain docs with `gs://` URIs for worker import into Agent Search; worker updates `indexed_status` to READY or FAILED.
 
 #### GCS Smoke Test
 ```http
@@ -181,8 +225,12 @@ Stores metadata about uploaded documents.
 - `filename` - Original filename
 - `storage_uri` - Path to stored file
 - `uploaded_at` - Upload timestamp
-- `indexed_status` - Status: `pending`, `indexing`, `ready`, `failed`
+- `staging_uri` - Original staged GCS object when applicable
+- `domain` - Business document domain (`operations`, `compliance`, `finance`)
+- `indexed_status` - Lifecycle status: `pending`, `staged`, `classified`, `moving`, `indexing`, `ready`, `failed`, `archived`
 - `datastore_ref` - Vertex AI Search datastore reference (when indexed)
+- `index_job_id` - Last Redis worker import job id
+- `last_error` - Last lifecycle/indexing error
 - `deleted_at` - Soft delete timestamp
 
 #### audit_event
@@ -280,7 +328,9 @@ When the service is running, visit:
 - `GOOGLE_APPLICATION_CREDENTIALS` - Path to GCP service account JSON (default: /run/secrets/gcp-sa.json)
 - `GCS_BUCKET_NAME` - GCS bucket name (from `.env`; required when `STORAGE_BACKEND=gcs`)
 - `STORAGE_BACKEND` - `local` or `gcs` (from `.env`)
-- `GOOGLE_CLOUD_PROJECT`, `DATA_STORE_ID`, `DISCOVERY_ENGINE_LOCATION` - Required for Vertex AI Search document import
+- `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT_NUMBER`, `DISCOVERY_ENGINE_LOCATION` - Required for Agent Search import/query paths
+- `DOC_DOMAIN_REGISTRY_PATH` - JSON registry for staging/domain buckets, data stores, engines, and serving configs
+- `DATA_STORE_ID`, `ENGINE_ID` - Legacy single-store values only; current domain flow should use the registry
 
 ### Volume Mounts
 
@@ -312,10 +362,10 @@ curl -X POST "http://localhost:8000/docs/upload" \
 # Get status
 curl http://localhost:8000/docs/status
 
-# Query (stub)
+# Query domain RAG
 curl -X POST "http://localhost:8000/docs/query" \
   -H "Content-Type: application/json" \
-  -d '{"query": "test query"}'
+  -d '{"query": "test query", "domain": "compliance"}'
 
 # GCS smoke test
 curl http://localhost:8000/gcs/smoke
@@ -344,9 +394,9 @@ The API Gateway supports Google Cloud Storage for document storage. This is conf
 ### Setup
 
 1. **Run `.\Scripts\GC-Build.ps1`** to create project, bucket, service account, and key (saved to `secrets/`)
-2. **Set `.env`**: `STORAGE_BACKEND=gcs`, `GCS_BUCKET_NAME=<bucket from gc-foundation.json>`, `GOOGLE_CLOUD_PROJECT`, `DATA_STORE_ID`, `ENGINE_ID`
+2. **Set `.env`**: `STORAGE_BACKEND=gcs`, `GCS_BUCKET_NAME=<staging bucket from gc-foundation.json>`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT_NUMBER`, `DOC_DOMAIN_REGISTRY_PATH`
 3. **Credentials**: Mounted from `./secrets/aiops-gc-poc-pilot__aiops-gc-app-key.json` (docker-compose); `GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-sa.json`
-4. **Vertex AI Search**: Create data store with import prefix `gs://<bucket>/docs/`; run `GC-Fix-DiscoveryEngine-Permissions.ps1` if connector fails
+4. **Agent Search domain resources**: Run `.\Scripts\GC-Provision-Domain-RAG.ps1` to create/verify domain data stores and search apps, then update `secrets/domain-registry.json`
 
 ### Testing
 
@@ -360,19 +410,12 @@ This will upload, verify, and delete a test blob, confirming that:
 - Service account has proper permissions
 - GCS bucket is accessible
 
-### Future Integration
-
-- Update `save_uploaded_file()` to use GCS when `STORAGE_BACKEND=gcs`
-- Store document metadata with GCS object references
-- Serve documents from GCS via signed URLs or direct access
-
 ## Next Steps
 
-1. **Vertex AI Search Integration**
-   - Implement document indexing
-   - Replace query stub with actual search
-   - Return citations from search results
-   - Use GCS for document storage if `STORAGE_BACKEND=gcs`
+1. **Module A Hardening**
+   - Add automated tests for move/index/query/refusal behavior
+   - Add retry/backoff around long-running import operations
+   - Add soft delete, reindex, and export endpoints
 
 2. **Module B Implementation**
    - Email upload and parsing

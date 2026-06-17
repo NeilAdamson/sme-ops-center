@@ -10,6 +10,31 @@ API_BASE_URL = os.getenv("API_BASE_URL", "http://api-gateway:8000")
 logger = logging.getLogger(__name__)
 
 
+def _error_payload(exc: requests.exceptions.RequestException, fallback: str) -> Dict[str, Any]:
+    """Normalize API error payloads for Streamlit success/error checks."""
+    response = getattr(exc, "response", None)
+    if response is None:
+        return {"error": str(exc)}
+    try:
+        data = response.json()
+    except Exception:
+        return {"error": f"HTTP {response.status_code}: {str(exc)}"}
+
+    detail = data.get("detail") if isinstance(data, dict) else None
+    if isinstance(detail, dict):
+        return {
+            "error": detail.get("error") or fallback,
+            "detail": detail.get("detail"),
+            "request_id": detail.get("request_id"),
+            "raw": data,
+        }
+    if isinstance(detail, str):
+        return {"error": fallback, "detail": detail, "raw": data}
+    if isinstance(data, dict) and data.get("error"):
+        return data
+    return {"error": fallback, "raw": data}
+
+
 def upload_document(file_bytes: bytes, filename: str) -> Optional[Dict[str, Any]]:
     """Upload a document to the API Gateway."""
     try:
@@ -23,13 +48,7 @@ def upload_document(file_bytes: bytes, filename: str) -> Optional[Dict[str, Any]
         return response.json()
     except requests.exceptions.RequestException as e:
         logger.error(f"Upload failed: {e}")
-        if hasattr(e, "response") and e.response is not None:
-            try:
-                error_data = e.response.json()
-                return error_data
-            except:
-                return {"error": f"HTTP {e.response.status_code}: {str(e)}"}
-        return {"error": str(e)}
+        return _error_payload(e, "Upload failed")
 
 
 def get_document_status() -> Optional[Dict[str, Any]]:
@@ -43,13 +62,7 @@ def get_document_status() -> Optional[Dict[str, Any]]:
         return response.json()
     except requests.exceptions.RequestException as e:
         logger.error(f"Status query failed: {e}")
-        if hasattr(e, "response") and e.response is not None:
-            try:
-                error_data = e.response.json()
-                return error_data
-            except:
-                return {"error": f"HTTP {e.response.status_code}: {str(e)}"}
-        return {"error": str(e)}
+        return _error_payload(e, "Status query failed")
 
 
 def query_documents(query: str, domain: str = "all") -> Optional[Dict[str, Any]]:
@@ -64,13 +77,7 @@ def query_documents(query: str, domain: str = "all") -> Optional[Dict[str, Any]]
         return response.json()
     except requests.exceptions.RequestException as e:
         logger.error(f"Query failed: {e}")
-        if hasattr(e, "response") and e.response is not None:
-            try:
-                error_data = e.response.json()
-                return error_data
-            except:
-                return {"error": f"HTTP {e.response.status_code}: {str(e)}"}
-        return {"error": str(e)}
+        return _error_payload(e, "Query failed")
 
 
 def get_storage_config() -> Optional[Dict[str, Any]]:
@@ -99,12 +106,7 @@ def get_doc_domains() -> Optional[Dict[str, Any]]:
         return response.json()
     except requests.exceptions.RequestException as e:
         logger.error(f"Domain config query failed: {e}")
-        if hasattr(e, "response") and e.response is not None:
-            try:
-                return e.response.json()
-            except:
-                return {"error": f"HTTP {e.response.status_code}: {str(e)}"}
-        return {"error": str(e)}
+        return _error_payload(e, "Domain config query failed")
 
 
 def move_document(doc_id: int, domain: str, archive_staging: bool = True) -> Optional[Dict[str, Any]]:
@@ -123,12 +125,7 @@ def move_document(doc_id: int, domain: str, archive_staging: bool = True) -> Opt
         return response.json()
     except requests.exceptions.RequestException as e:
         logger.error(f"Document move failed: {e}")
-        if hasattr(e, "response") and e.response is not None:
-            try:
-                return e.response.json()
-            except:
-                return {"error": f"HTTP {e.response.status_code}: {str(e)}"}
-        return {"error": str(e)}
+        return _error_payload(e, "Document move failed")
 
 
 def trigger_index(doc_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
@@ -144,9 +141,4 @@ def trigger_index(doc_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         return response.json()
     except requests.exceptions.RequestException as e:
         logger.error(f"Index queue request failed: {e}")
-        if hasattr(e, "response") and e.response is not None:
-            try:
-                return e.response.json()
-            except:
-                return {"error": f"HTTP {e.response.status_code}: {str(e)}"}
-        return {"error": str(e)}
+        return _error_payload(e, "Index queue request failed")

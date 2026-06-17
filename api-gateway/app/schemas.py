@@ -66,6 +66,7 @@ class DocMoveResponse(BaseModel):
     target_uri: str
     indexed_status: str
     index_job_id: Optional[str] = None
+    indexing_error: Optional[str] = None
     message: str
 
 

@@ -1,21 +1,34 @@
-# Milestone 1 Status - Module A APIs (Partial)
+# Milestone 1 Status - Module A APIs
 
-## Status: 🟡 In Progress
+## 2026-06 Current Status: Domain RAG Flow Implemented
+
+The older sections in this file preserve the build history from the initial stub implementation. Current Module A behavior is:
+
+- Uploads land in the GCS staging bucket only.
+- `GET /docs/domains` exposes the domain registry for staging, operations, compliance, and finance.
+- `POST /docs/move` manually classifies and moves a staged document to `gs://<domain-bucket>/docs/<doc_id>/<filename>`.
+- Redis/worker indexing imports moved domain documents into the matching Agent Search datastore.
+- `POST /docs/query` uses Agent Search grounded generation through the selected domain serving config.
+- The backend enforces “no source = no answer”; empty citations return exactly `Information not found in internal records.`
+- Document lifecycle now includes `staged`, `classified`, `moving`, `indexing`, `ready`, `failed`, and `archived`.
+
+Remaining Module A hardening: automated tests, soft delete/reindex/export, retry/backoff improvements, and demo corpus acceptance prompts.
+
+## Status Summary
 
 **Completed Tasks:**
 - ✅ Task 1: Database migrations and core tables
-- ✅ Task 2: Module A API endpoints (stub implementation)
-
-**Remaining:**
-- ⏳ Vertex AI Search query integration (replace query stub with real retrieval)
-
-**Completed (New):**
-- ✅ Task 4: GCS smoke test endpoint (Google Cloud Storage integration test)
+- ✅ Task 2: Module A API endpoints for upload, domains, move, index, status, and query
+- ✅ Task 3: GCS smoke test endpoint
+- ✅ Task 4: Domain registry-backed Agent Search resources
+- ✅ Task 5: Redis/worker indexing flow
+- ✅ Task 6: Agent Search query with citations and refusal behavior
 
 **Frontend UI Tasks:**
 - ✅ Task 1: Environment variable configuration (`API_BASE_URL`)
 - ✅ Task 2: End-to-end UI flow (landing page, Docs module)
 - ✅ Task 3: Trust surface (Request ID panel)
+- ✅ Task 4: File Manager for manual domain movement
 
 ---
 
@@ -54,12 +67,12 @@
 ### Implemented Endpoints
 
 #### 1. POST /docs/upload
-**Purpose:** Upload document files for indexing
+**Purpose:** Upload document files to staging
 
 **Functionality:**
 - Accepts multipart/form-data file upload
-- Saves file to local volume (`/app/uploads`) or GCS at `gs://bucket/docs/<request_id>/<filename>` when `STORAGE_BACKEND=gcs`
-- Creates `doc_asset` record; when GCS, triggers Vertex AI Search import and updates `indexed_status` (INDEXING → READY or FAILED)
+- Saves file to local volume (`/app/uploads`) or to the GCS staging bucket at `gs://<uploads-bucket>/docs/<request_id>/<filename>` when `STORAGE_BACKEND=gcs`
+- Creates `doc_asset` record with staged lifecycle status; GCS documents are not indexed until moved to a domain
 - Creates `audit_event` for traceability
 - Returns `request_id`, `doc_id`, `filename`, success message
 
@@ -166,15 +179,15 @@ GET /docs/status
 }
 ```
 
-#### 4. POST /docs/query (Stub)
-**Purpose:** Query documents (stub - returns refusal until Vertex AI Search integrated)
+#### 4. POST /docs/query
+**Purpose:** Query domain documents through Agent Search grounded generation
 
 **Functionality:**
-- Accepts query text in request body
-- Returns hard refusal: `"Information not found in internal records."`
-- Returns empty `citations[]` array
+- Accepts query text and selected domain (`operations`, `compliance`, `finance`, or `all`)
+- Returns grounded answer only when citations exist
+- Returns hard refusal when citations are empty: `"Information not found in internal records."`
 - Creates `audit_event` with prompt hash and query details
-- Implements "no source = no answer" rule (PRD hard trust rule)
+- Implements "no source = no answer" rule in the API layer
 
 **Request:**
 ```http
@@ -182,7 +195,8 @@ POST /docs/query
 Content-Type: application/json
 
 {
-  "query": "What is our refund policy?"
+  "query": "What is our refund policy?",
+  "domain": "compliance"
 }
 ```
 
@@ -256,11 +270,11 @@ All endpoints follow PRD Section 9 requirements:
 
 ## Next Steps
 
-1. **Vertex AI Search Query Integration** (requires GCP credentials):
-   - Replace stub query endpoint with Vertex AI Search retrieval
-   - Implement citation extraction from search results
-   - Return actual answers with citations (only if citations exist)
-   - Requires `DATA_STORE_ID`, `ENGINE_ID` in `.env`
+1. **Module A hardening**:
+   - Add automated tests for upload, move, index, query, citations, and refusal behavior
+   - Add retry/backoff around worker import failures
+   - Add lifecycle timeline and audit drill-through in the UI
+   - Keep using `DOC_DOMAIN_REGISTRY_PATH`; do not return to a single global `DATA_STORE_ID`
 
 2. **Document Processing** (optional enhancements):
    - Add document parsing (PDF, DOCX, TXT)
@@ -270,7 +284,8 @@ All endpoints follow PRD Section 9 requirements:
 3. **Frontend Integration**: ✅ COMPLETE
    - ✅ Streamlit UI for document upload
    - ✅ Display document status list
-   - ✅ Query interface with citation display (stub)
+   - ✅ File Manager for manual domain movement
+   - ✅ Query interface with domain selector and citation display
    - ✅ Landing page with module tiles
    - ✅ Request ID panel for trust/traceability
    - ✅ Environment variable configuration (`API_BASE_URL`)
@@ -292,11 +307,11 @@ curl -X POST "http://localhost:8000/docs/upload" \
 curl "http://localhost:8000/docs/status"
 ```
 
-3. **Query documents (stub):**
+3. **Query documents:**
 ```bash
 curl -X POST "http://localhost:8000/docs/query" \
   -H "Content-Type: application/json" \
-  -d '{"query": "What is our policy?"}'
+  -d '{"query": "What is our policy?", "domain": "compliance"}'
 ```
 
 ### Verification
@@ -437,22 +452,22 @@ http://localhost:8000/gcs/smoke
 
 ### Next Steps
 
-1. **Vertex AI Search query API** - Replace query stub with Discovery Engine search/answer API
-2. **Implement GCS file retrieval** - For serving uploaded documents (if needed)
+1. **Automated RAG tests** - Verify cited answers, no-source refusal, and no cross-domain leakage
+2. **Document operations** - Add soft delete, reindex, and export/download flows
 
 ---
 
-### Task 5a: Vertex AI Search Document Ingestion ✅
+### Task 5a: Agent Search Document Ingestion ✅
 
 **Implemented:**
-- GCS save path changed from `uploads/` to `docs/` (aligns with Data Store import prefix `gs://bucket/docs/`)
-- Discovery Engine `DocumentServiceClient.import_documents()` called after GCS upload
-- Automatic import on upload when `STORAGE_BACKEND=gcs`; `indexed_status` updated to READY/FAILED
-- `POST /docs/index` endpoint to trigger indexing for PENDING docs (all or by `doc_id`)
-- `DATA_STORE_ID` and `ENGINE_ID` added to `.env.example` and PRD
+- GCS upload path uses staging bucket `docs/` prefix
+- Manual move copies documents to `gs://<domain-bucket>/docs/<doc_id>/<filename>`
+- Worker calls Discovery Engine `DocumentServiceClient.import_documents()` after domain move
+- `POST /docs/index` endpoint queues eligible failed/classified docs for worker import
+- Domain registry values added to `.env.example` and PRD
 - `google-cloud-discoveryengine==0.17.0` added to api-gateway requirements
 
-**Required env vars:** `GOOGLE_CLOUD_PROJECT`, `DATA_STORE_ID`, `DISCOVERY_ENGINE_LOCATION`, `GCS_BUCKET_NAME` (when using GCS)
+**Required env vars:** `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT_NUMBER`, `DISCOVERY_ENGINE_LOCATION`, `GCS_BUCKET_NAME`, `DOC_DOMAIN_REGISTRY_PATH` (when using GCS)
 
 ### GCP Scripts (aligned with docs)
 

@@ -10,7 +10,8 @@ The frontend is built with Streamlit and implements:
 - Module-based navigation (Docs, Inbox, Finance)
 - Document upload and management (Module A)
 - Document status viewing
-- Document querying (stub until Vertex AI Search integrated)
+- Manual document classification and movement into business domains
+- Domain-scoped document querying with citations
 - Request ID tracking for traceability (trust surface)
 
 ## Architecture
@@ -46,7 +47,7 @@ API_BASE_URL=http://api-gateway:8000  # Docker Compose networking
 
 ### Docs Module
 
-Three tabs with full functionality:
+Four tabs with full functionality:
 
 #### 📤 Upload Tab
 - File uploader (supports PDF, TXT, DOCX, MD)
@@ -58,6 +59,14 @@ Three tabs with full functionality:
   - `message`
 - Duplicate warning (if applicable)
 - Error handling
+- GCS uploads land in the staging bucket and are not queryable until moved to a business domain
+
+#### 🗂️ File Manager Tab
+- Lists staged and domain documents
+- Lets the user select a target domain: Operations, Compliance, or Finance
+- Calls `POST /docs/move` to copy a document into `gs://<domain-bucket>/docs/<doc_id>/<filename>`
+- Shows whether indexing was queued or indexing needs retry
+- Captures move `request_id` in the trust sidebar
 
 #### 📊 Status Tab
 - "Refresh Status" button
@@ -68,24 +77,29 @@ Three tabs with full functionality:
   - Indexed status (pending/indexing/ready/failed)
   - Upload timestamp
   - Storage URI
+  - Staging URI
+  - Domain
   - Datastore reference (if available)
+  - Last error (if any)
 - Shows `request_id` for traceability
 - Empty state message when no documents
 
 #### 🔍 Query Tab
 - Text area for entering questions
+- Domain selector (`all`, `operations`, `compliance`, `finance`)
 - "Query Documents" button
 - Displays response:
   - `request_id` (UUID)
-  - `answer` (currently refusal: "Information not found in internal records.")
-  - `citations[]` (empty array until Vertex AI Search integrated)
+  - grounded answer text
+  - `citations[]` with document name, snippet, page/section, URI, and domain
+  - `domains_queried`
 - Proper formatting for refusal messages
 - Error handling
 
 ### Trust Surface: Request ID Panel
 
 - **Location:** Sidebar on Docs page
-- **Purpose:** Show last `request_id` for each operation type (upload, status, query)
+- **Purpose:** Show last `request_id` for each operation type (upload, move, status, query)
 - **Features:**
   - Automatically updates when operations succeed
   - Persists across tab switches (session state)
@@ -125,10 +139,25 @@ Retrieves status of all uploaded documents.
 - **Endpoint:** `GET /docs/status`
 - **Returns:** Response dictionary with `request_id` and `documents[]` array
 
-### `query_documents(query)`
-Queries documents (stub until Vertex AI Search integrated).
+### `query_documents(query, domain="all")`
+Queries documents through Agent Search grounded generation.
 - **Endpoint:** `POST /docs/query`
-- **Returns:** Response dictionary with `request_id`, `answer`, `citations[]`
+- **Returns:** Response dictionary with `request_id`, `answer`, `citations[]`, `domains_queried`, and `grounding_score`
+
+### `get_doc_domains()`
+Retrieves staging and business-domain registry metadata.
+- **Endpoint:** `GET /docs/domains`
+- **Returns:** Staging bucket plus domain bucket/datastore/engine readiness metadata
+
+### `move_document(doc_id, domain, archive_staging=True)`
+Moves a staged document into a business-domain bucket and queues indexing.
+- **Endpoint:** `POST /docs/move`
+- **Returns:** Target URI, lifecycle status, index job id, and optional `indexing_error`
+
+### `trigger_index(doc_id=None)`
+Queues indexing for eligible failed/classified domain documents.
+- **Endpoint:** `POST /docs/index`
+- **Returns:** Per-document queue results
 
 All functions:
 - Use `API_BASE_URL` from environment
@@ -184,20 +213,26 @@ Access at: http://localhost:8501
    - [ ] Request ID appears in sidebar
    - [ ] Duplicate warning appears (if applicable)
 
-3. **Status Tab:**
+3. **File Manager Tab:**
+   - [ ] Staged documents are visible
+   - [ ] Domain selector is populated from `/docs/domains`
+   - [ ] Move button calls API and updates request ID
+   - [ ] Redis/indexing queue errors show as warnings, not false success
+
+4. **Status Tab:**
    - [ ] Document list loads automatically
    - [ ] All document details visible
    - [ ] Request ID appears in sidebar
    - [ ] "Refresh Status" button works
 
-4. **Query Tab:**
+5. **Query Tab:**
    - [ ] Query input accepts text
    - [ ] Query button triggers API call
-   - [ ] Refusal text displays correctly
-   - [ ] Empty citations array shown
+   - [ ] Known-answer questions display answer and citations
+   - [ ] Unknown questions display `Information not found in internal records.`
    - [ ] Request ID appears in sidebar
 
-5. **Request ID Panel:**
+6. **Request ID Panel:**
    - [ ] Appears in sidebar on Docs page
    - [ ] Updates automatically after operations
    - [ ] Shows correct request IDs for each operation
@@ -249,6 +284,7 @@ The frontend includes comprehensive error handling:
    - Full audit screen
    - Request history
    - Citation display improvements
+   - Domain lifecycle timeline per document
 
 4. **UI Improvements:**
    - Document preview

@@ -1,5 +1,18 @@
 # Frontend UI Implementation Summary
 
+## 2026-06 Current Status: Domain File Manager And RAG Query Added
+
+The original sections below describe the first three-tab Docs UI. The current Docs UI now includes:
+
+- Upload tab for staging documents in GCS.
+- File Manager tab for manual movement into Operations, Compliance, or Finance.
+- Status tab showing lifecycle/domain/datastore/error fields.
+- Query tab with domain selector and Agent Search grounded answer display.
+- Request ID tracking for upload, move, status, and query operations.
+- Error normalization so failed API responses are shown as errors/warnings, not false success messages.
+
+Known next UI hardening: lifecycle timeline, richer citation display, document preview/download, and audit history links.
+
 ## Overview
 
 This document summarizes the frontend UI implementation work completed for Milestone 1, including three key tasks that enable end-to-end user interaction with the Docs module (Module A).
@@ -38,7 +51,7 @@ API_BASE_URL = os.getenv("API_BASE_URL", "http://api-gateway:8000")
 ### Objective
 Implement complete UI flow in the browser (http://localhost:8501) with:
 - Landing page showing 3 tiles (only Docs enabled)
-- Docs page with upload, status list, and query functionality
+- Docs page with upload, file manager, status list, and domain query functionality
 
 ### Implementation
 
@@ -51,7 +64,7 @@ Implement complete UI flow in the browser (http://localhost:8501) with:
 - Clicking "Open Docs Module" navigates to Docs page
 
 **2. Docs Page (`render_docs_page()`)**
-Three tabs with full functionality:
+Four tabs with full functionality:
 
 **📤 Upload Tab:**
 - File uploader supporting PDF, TXT, DOCX, MD formats
@@ -64,6 +77,14 @@ Three tabs with full functionality:
   - `message`
 - Duplicate warning display (if applicable)
 - Error handling with user-friendly messages
+- GCS uploads land in staging and are not queryable until moved to a domain
+
+**🗂️ File Manager Tab:**
+- Lists staged and domain documents
+- Lets the user choose Operations, Compliance, or Finance
+- Calls `/docs/move` to copy the document into the selected domain bucket
+- Shows indexing queued vs indexing retry-needed states
+- Updates the Move request ID in the sidebar
 
 **📊 Status Tab:**
 - "Refresh Status" button
@@ -71,28 +92,36 @@ Three tabs with full functionality:
 - Displays list of uploaded documents in expandable cards:
   - Document ID
   - Filename
-  - Indexed status (`pending`, `indexing`, `ready`, `failed`)
-  - Upload timestamp (formatted)
-  - Storage URI
-  - Datastore reference (if available)
+   - Indexed status (`pending`, `indexing`, `ready`, `failed`)
+   - Upload timestamp (formatted)
+   - Storage URI
+   - Staging URI
+   - Domain
+   - Datastore reference (if available)
+   - Last error (if any)
 - Shows request_id for traceability
 - Empty state message when no documents exist
 
 **🔍 Query Tab:**
 - Text area for entering questions
+- Domain selector (`all`, `operations`, `compliance`, `finance`)
 - "Query Documents" button
 - Displays response with:
   - `request_id` (UUID)
-  - `answer` (refusal text: "Information not found in internal records.")
-  - `citations[]` (empty array, as expected for stub)
+  - grounded answer text or refusal text
+  - `citations[]` with document metadata, snippets, page/section, URI, and domain
+  - `domains_queried`
 - Proper formatting for refusal messages
 - Error handling for failed queries
 
 **3. Utility Functions (`utils.py`)**
 Created reusable API client functions:
 - `upload_document(file_bytes, filename)` - POST to `/docs/upload`
+- `get_doc_domains()` - GET `/docs/domains`
+- `move_document(doc_id, domain, archive_staging)` - POST `/docs/move`
 - `get_document_status()` - GET `/docs/status`
-- `query_documents(query)` - POST `/docs/query`
+- `query_documents(query, domain)` - POST `/docs/query`
+- `trigger_index(doc_id)` - POST `/docs/index`
 - All functions use `API_BASE_URL` from environment
 - Error handling with try/except and logging
 - Returns structured response data or error dictionaries
@@ -204,20 +233,28 @@ Add lightweight "Request ID" panel showing last `request_id` for upload, status,
    - Verify request_id appears in sidebar under "Status"
    - Click "Refresh Status" and verify it updates
 
-6. **Test query:**
+6. **Test file manager:**
+   - Navigate to File Manager tab
+   - Select a staged document and target domain
+   - Click "Move to domain"
+   - Verify target URI and Move request ID appear
+
+7. **Test query:**
    - Navigate to Query tab
+   - Select the correct domain
    - Enter a question (e.g., "What is our refund policy?")
    - Click "Query Documents"
-   - Verify refusal text appears: "Information not found in internal records."
-   - Verify citations array is empty
+   - Verify known-answer questions return citations
+   - Verify unknown questions return: "Information not found in internal records."
    - Verify request_id appears in sidebar under "Query"
 
 ### Verification Checklist
 - ✅ Landing page shows 3 tiles (only Docs enabled)
-- ✅ Docs page has all three tabs (Upload, Status, Query)
+- ✅ Docs page has four tabs (Upload, File Manager, Status, Query)
 - ✅ Upload shows `doc_id` + `request_id` on success
+- ✅ File Manager moves staged documents into domain buckets
 - ✅ Status list shows uploaded documents
-- ✅ Query shows refusal text and empty citations
+- ✅ Query shows cited answers or the exact refusal text
 - ✅ Request ID panel appears in sidebar
 - ✅ Request IDs update automatically after operations
 - ✅ All API calls use `API_BASE_URL` (no hardcoding)
@@ -228,11 +265,10 @@ Add lightweight "Request ID" panel showing last `request_id` for upload, status,
 
 ## Next Steps
 
-1. **Vertex AI Search Query Integration** (Milestone 1 remaining):
-   - Replace query stub with Vertex AI Search search/answer API
-   - Display real citations from search results
-   - Status already shows indexed_status (pending/indexing/ready/failed); backend triggers import on upload when GCS is used
-2. **Optional:** Add UI to trigger `POST /docs/index` for re-indexing PENDING docs (e.g. "Index now" button on Status tab)
+1. **Module A hardening:**
+   - Add lifecycle timeline per document
+   - Add richer citation display and source preview/download
+   - Add UI to trigger `POST /docs/index` for retrying failed/classified docs
 
 2. **Additional Trust Surfaces**:
    - Expand Request ID panel to show timestamp

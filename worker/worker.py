@@ -17,6 +17,7 @@ QUEUE_NAME = os.getenv("DOC_INDEX_QUEUE", "doc_index_jobs")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://smeops:change-me@postgres:5432/smeops")
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "aiops-gc-poc-pilot")
+PROJECT_NUMBER = os.getenv("GOOGLE_CLOUD_PROJECT_NUMBER") or PROJECT_ID
 LOCATION = os.getenv("DISCOVERY_ENGINE_LOCATION", "global")
 
 redis_client = redis.from_url(REDIS_URL)
@@ -54,11 +55,9 @@ def import_document(storage_uri, data_store_id, request_id):
         else None
     )
     client = discoveryengine.DocumentServiceClient(client_options=client_options)
-    parent = client.branch_path(
-        project=PROJECT_ID,
-        location=LOCATION,
-        data_store=data_store_id,
-        branch="default_branch",
+    parent = (
+        f"projects/{PROJECT_NUMBER}/locations/{LOCATION}/collections/"
+        f"default_collection/dataStores/{data_store_id}/branches/default_branch"
     )
     request = discoveryengine.ImportDocumentsRequest(
         parent=parent,

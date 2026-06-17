@@ -28,14 +28,15 @@ cp .env.example .env
 3. **Edit `.env` with your actual values:**
    - `STORAGE_BACKEND=gcs` (required for Vertex AI Search document ingestion)
    - `GOOGLE_CLOUD_PROJECT` — your GCP project ID
-   - `GCS_BUCKET_NAME` — your GCS bucket name
-   - `DATA_STORE_ID` and `ENGINE_ID` — from Vertex AI Search console (Steps 13–15 in GCP checklist)
+   - `GOOGLE_CLOUD_PROJECT_NUMBER` — your numeric GCP project number, required by Agent Search serving/import paths
+   - `GCS_BUCKET_NAME` — the staging upload bucket only
+   - `DOC_DOMAIN_REGISTRY_PATH` — points to `secrets/domain-registry.json` in local Docker
    - `DISCOVERY_ENGINE_LOCATION=global`
    - Xero OAuth credentials (for Module C)
    - Database passwords
    - Other configuration as needed
 
-   **Data Store import prefix:** When creating the Vertex AI Search Data Store, set the import prefix to `gs://<bucket>/docs/` so it matches where the app uploads documents.
+   **Domain registry:** Module A no longer relies on one global `DATA_STORE_ID` / `ENGINE_ID`. The registry defines one document domain per business area: `operations`, `compliance`, and `finance`. Each domain has a source-of-truth bucket, `docs/` prefix, Agent Search data store, search app/engine, and serving config. The upload bucket is staging only.
 
 4. **Configure Google Cloud Storage credentials:**
    - Run `.\Scripts\GC-Build.ps1` to create the project and generate a dev key, or place your GCP service account JSON in `secrets/`
@@ -111,24 +112,26 @@ Docker Compose automatically handles the startup dependencies:
 
 See [MILESTONE0_STATUS.md](./MILESTONE0_STATUS.md) for detailed status and issues resolved.
 
-### Milestone 1: 🟡 In Progress (95% Complete)
+### Milestone 1: ✅ Complete For Domain RAG Flow
 - ✅ Task 1: Database migrations and core tables (`doc_asset`, `audit_event`)
-- ✅ Task 2: Module A API endpoints (upload, status, index, query stub)
-- ✅ Task 3: Frontend UI implementation (end-to-end flow with trust surface)
+- ✅ Task 2: Module A API endpoints (upload, domains, move, status, index, query)
+- ✅ Task 3: Frontend UI implementation (upload, file manager, status, query, trust surface)
 - ✅ Task 4: GCS smoke test endpoint (Google Cloud Storage integration test)
-- ✅ Task 5a: Vertex AI Search document ingestion (GCS `docs/` path + Discovery Engine import)
-- ⏳ Task 5b: Vertex AI Search query integration (replace stub with real retrieval)
+- ✅ Task 5a: Domain bucket movement and Redis/worker Agent Search import
+- ✅ Task 5b: Agent Search grounded generation with citations and no-source refusal
 
 **Implemented APIs:**
-- `POST /docs/upload` - Upload documents; when `STORAGE_BACKEND=gcs`, saves to `gs://bucket/docs/` and triggers Vertex AI Search import
-- `POST /docs/index` - Trigger indexing for PENDING docs in GCS (optional `doc_id` to index specific doc)
-- `GET /docs/status` - Get document status list (including `indexed_status`: pending/indexing/ready/failed)
-- `POST /docs/query` - Query stub (returns refusal until Vertex AI Search query API integrated)
+- `GET /docs/domains` - Return staging and business-domain registry
+- `POST /docs/upload` - Upload documents to the staging bucket only
+- `POST /docs/move` - Manually classify and move a staged document into a domain bucket
+- `POST /docs/index` - Queue worker indexing for classified domain documents
+- `GET /docs/status` - Get document lifecycle status (`staged`, `classified`, `indexing`, `ready`, `failed`, etc.)
+- `POST /docs/query` - Query one domain or all domains through Agent Search grounded generation; refuses without citations
 - `GET /gcs/smoke` - GCS smoke test (uploads, verifies, and deletes a test blob)
 
 **Implemented Frontend:**
 - Landing page with 3 module tiles (Docs enabled, Inbox/Finance coming soon)
-- Docs module with Upload, Status, and Query tabs
+- Docs module with Upload, File Manager, Status, and Query tabs
 - Request ID panel (trust surface) showing last request_id for each operation
 - Environment variable configuration (`API_BASE_URL`) - no hardcoding
 
@@ -220,21 +223,28 @@ Creates the base GCP infrastructure (project, service account, APIs, main bucket
 .\Scripts\GC-Build.ps1
 ```
 
-### GC-Create-DataStores.ps1 — Additional Data Stores
-Creates additional GCS buckets and Vertex AI Search data stores for:
+### GC-Provision-Domain-RAG.ps1 — Domain RAG Resources
+Creates or verifies one Agent Search data store and one search app per document domain, then updates `secrets/domain-registry.json`.
+
+```powershell
+.\Scripts\GC-Provision-Domain-RAG.ps1
+```
+
+The registry-backed domains are:
 - **Operations** — SOPs, manuals, procedures
-- **Compliance/Legal** — Policies, contracts  
+- **Compliance/Legal** — Policies, contracts
 - **Finance** — Tax, accounting documents
 
-**Prerequisites:** Run `GC-Build.ps1` first.
+The app uses `aiops-gc-poc-pilot-uploads-8aukzz` as staging only. Manual classification moves files to `gs://<domain-bucket>/docs/<doc_id>/<filename>`, then the worker imports the document into the matching domain Agent Search datastore.
+
+**Prerequisites:** Run `GC-Build.ps1` first and ensure the domain buckets exist.
+
+### GC-Create-DataStores.ps1 — Legacy Bucket/Data Store Helper
+This older helper creates domain buckets and provides console guidance. Prefer `GC-Provision-Domain-RAG.ps1` for the current registry-backed Agent Search setup.
 
 ```powershell
 .\Scripts\GC-Create-DataStores.ps1
 ```
-
-This enables module-specific data stores aligned with the PRD's modular structure (Module A vs Module C), allowing code to filter queries by functional area.
-
-**After running:** Create Vertex AI Search data stores via console (script provides instructions). Use a `docs/` folder per bucket (e.g. `gs://bucket-name/docs/`) and update `secrets/datastores-config.json` with `DATA_STORE_ID` values.
 
 ### GC-Fix-DiscoveryEngine-Permissions.ps1 — Fix Connector Permissions
 If Vertex AI Search connector fails or you see "Missing required permissions: storage.objects.get" when creating a data store, run:
@@ -278,12 +288,13 @@ Validates that all GCP resources are in compatible regions and can connect to ea
 sme-ops-center/
 ├── docker-compose.yml      # Service orchestration
 ├── .env.example            # Environment template
-├── secrets/                # GCP keys and config (gitignored); gc-foundation.json, datastores-config.json
+├── secrets/                # GCP keys and config (gitignored); gc-foundation.json, domain-registry.json
 ├── Scripts/                # Deploy and GCP setup
 │   ├── dev-deploy.ps1      # Docker rebuild/restart (development)
 │   ├── prod-deploy.sh      # Docker rebuild/restart (production)
 │   ├── GC-Build.ps1        # GCP foundation (project, bucket, SA, IAM)
-│   ├── GC-Create-DataStores.ps1   # Operations, Compliance, Finance buckets
+│   ├── GC-Provision-Domain-RAG.ps1 # Domain datastores, search apps, serving configs
+│   ├── GC-Create-DataStores.ps1   # Legacy Operations, Compliance, Finance bucket helper
 │   ├── GC-Fix-DiscoveryEngine-Permissions.ps1
 │   └── GC-Validate-Regions.ps1
 ├── frontend/               # Streamlit UI
@@ -295,7 +306,7 @@ sme-ops-center/
 │   │   ├── routes/         # API routes (docs, gcs)
 │   │   ├── models.py       # Database models
 │   │   ├── schemas.py      # Pydantic schemas
-│   │   └── services.py     # Business logic (GCS, Discovery Engine import)
+│   │   └── services.py     # Business logic (GCS move, Redis queue, Agent Search query/import)
 │   └── migrations/         # Alembic migrations
 ├── worker/                 # Background jobs
 ├── mcp-bridge/             # Node.js MCP server

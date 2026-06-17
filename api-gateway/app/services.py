@@ -229,7 +229,7 @@ def move_doc_to_domain(
     domain_name: str,
     request_id: str,
     archive_staging: bool = True
-) -> tuple[str, Optional[str]]:
+) -> tuple[str, Optional[str], Optional[str]]:
     """Copy a staged GCS object into a domain bucket and queue indexing."""
     from google.cloud import storage as gcs_storage
 
@@ -274,8 +274,14 @@ def move_doc_to_domain(
     db.commit()
     db.refresh(doc_asset)
 
-    job_id = enqueue_index_job(db, doc_asset, request_id)
-    return target_uri, job_id
+    try:
+        job_id = enqueue_index_job(db, doc_asset, request_id)
+        return target_uri, job_id, None
+    except Exception as exc:
+        error = f"Document moved, but indexing was not queued: {exc}"
+        logger.warning(error)
+        update_doc_indexed_status(db, doc_asset, IndexedStatus.FAILED, last_error=error)
+        return target_uri, None, error
 
 
 def parse_gcs_uri(uri: str) -> tuple[str, str]:
@@ -329,6 +335,7 @@ def trigger_vertex_import(storage_uri: str, request_id: str = "") -> tuple[bool,
     Requires: GOOGLE_CLOUD_PROJECT, DISCOVERY_ENGINE_LOCATION, DATA_STORE_ID.
     """
     project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
+    project_number = os.getenv("GOOGLE_CLOUD_PROJECT_NUMBER") or project_id
     location = os.getenv("DISCOVERY_ENGINE_LOCATION", "global")
     data_store_id = os.getenv("DATA_STORE_ID")
     if not project_id or not data_store_id:
@@ -346,11 +353,9 @@ def trigger_vertex_import(storage_uri: str, request_id: str = "") -> tuple[bool,
             else None
         )
         client = discoveryengine.DocumentServiceClient(client_options=client_options)
-        parent = client.branch_path(
-            project=project_id,
-            location=location,
-            data_store=data_store_id,
-            branch="default_branch",
+        parent = (
+            f"projects/{project_number}/locations/{location}/collections/"
+            f"default_collection/dataStores/{data_store_id}/branches/default_branch"
         )
         request = discoveryengine.ImportDocumentsRequest(
             parent=parent,
@@ -455,18 +460,21 @@ def query_grounded_domain(query: str, domain: dict, request_id: str) -> dict:
         }
 
     citations = []
-    for reference in references:
-        reference_id = reference.get("id") or reference.get("referenceId")
+    for reference_index, reference in enumerate(references):
+        reference_id = reference.get("id") or reference.get("referenceId") or str(reference_index)
         if cited_reference_ids and reference_id not in cited_reference_ids:
             continue
         chunk_info = reference.get("chunkInfo", {}) or {}
         document_metadata = chunk_info.get("documentMetadata", {}) or {}
         uri = document_metadata.get("uri") or reference.get("uri")
-        snippet = (
+        snippet_text = (
             chunk_info.get("content")
             or reference.get("content")
             or answer_text
-        ).strip()
+        )
+        snippet = snippet_text.strip() if snippet_text else ""
+        if not snippet:
+            continue
         citations.append({
             "doc_name": document_metadata.get("title") or Path(uri or "").name or "Internal document",
             "snippet": snippet,
