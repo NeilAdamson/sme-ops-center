@@ -12,6 +12,9 @@ from app.schemas import (
     DocStatusResponse,
     DocIndexRequest,
     DocIndexResponse,
+    DocDeleteRequest,
+    DocDeleteResponse,
+    StorageDeleteRequest,
     ErrorResponse,
     Citation,
     DocDomainResponse,
@@ -37,6 +40,7 @@ from app.services import (
     query_grounded_domains,
     browse_document_storage,
     STORAGE_BACKEND,
+    delete_document,
 )
 from app.models import AuditModule, AuditStatus, IndexedStatus
 from app.domain_registry import get_domain_registry
@@ -457,3 +461,114 @@ async def query_documents(
                 detail=str(e)
             ).dict()
         )
+
+
+@router.post("/{doc_id}/delete", response_model=DocDeleteResponse)
+async def delete_document_endpoint(
+    doc_id: int,
+    request: DocDeleteRequest = Body(...),
+    db: Session = Depends(get_db)
+):
+    """Delete a document asset (soft-delete or hard-delete, and optionally delete from storage)."""
+    request_id = generate_request_id()
+    try:
+        db_deleted, storage_deleted, filename, message = delete_document(
+            db=db,
+            doc_id=doc_id,
+            hard_delete=request.hard_delete,
+            delete_storage=request.delete_storage
+        )
+        if not db_deleted:
+            raise HTTPException(status_code=404, detail=message)
+            
+        create_audit_event(
+            db=db,
+            module=AuditModule.MODULE_A,
+            request_id=request_id,
+            sources_json={
+                "doc_id": doc_id,
+                "filename": filename,
+                "hard_delete": request.hard_delete,
+                "delete_storage": request.delete_storage,
+                "storage_deleted": storage_deleted
+            },
+            status=AuditStatus.SUCCESS
+        )
+        
+        return DocDeleteResponse(
+            request_id=request_id,
+            doc_id=doc_id,
+            filename=filename,
+            deleted_from_db=request.hard_delete,
+            deleted_from_storage=storage_deleted,
+            message=message
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Delete failed (request_id: {request_id}): {e}", exc_info=True)
+        create_audit_event(
+            db=db,
+            module=AuditModule.MODULE_A,
+            request_id=request_id,
+            status=AuditStatus.FAILURE,
+            error=str(e)
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=ErrorResponse(
+                request_id=request_id,
+                error="Delete failed",
+                detail=str(e)
+            ).dict()
+        )
+
+
+@router.post("/delete-storage")
+async def delete_storage_endpoint(
+    request: StorageDeleteRequest,
+    db: Session = Depends(get_db)
+):
+    """Delete an untracked file directly from storage."""
+    from app.services import delete_gcs_file, delete_local_file
+    request_id = generate_request_id()
+    try:
+        uri = request.storage_uri
+        deleted = False
+        if uri.startswith("gs://"):
+            deleted = delete_gcs_file(uri)
+        else:
+            deleted = delete_local_file(uri)
+            
+        if not deleted:
+            raise HTTPException(status_code=404, detail="File not found in storage")
+            
+        create_audit_event(
+            db=db,
+            module=AuditModule.MODULE_A,
+            request_id=request_id,
+            sources_json={"storage_uri": uri},
+            status=AuditStatus.SUCCESS
+        )
+        return {"ok": True, "request_id": request_id, "message": f"Deleted storage file at {uri}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Storage delete failed (request_id: {request_id}): {e}", exc_info=True)
+        create_audit_event(
+            db=db,
+            module=AuditModule.MODULE_A,
+            request_id=request_id,
+            status=AuditStatus.FAILURE,
+            error=str(e)
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=ErrorResponse(
+                request_id=request_id,
+                error="Storage delete failed",
+                detail=str(e)
+            ).dict()
+        )
+
+

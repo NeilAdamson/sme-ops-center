@@ -116,6 +116,27 @@ class DocIndexResponse(BaseModel):
     details: List[Dict[str, Any]] = []  # Per-doc results: doc_id, status, error
 
 
+class DocDeleteRequest(BaseModel):
+    """Request schema for deleting a document."""
+    hard_delete: bool = False
+    delete_storage: bool = True
+
+
+class DocDeleteResponse(BaseModel):
+    """Response schema for deleting a document."""
+    request_id: str
+    doc_id: int
+    filename: str
+    deleted_from_db: bool
+    deleted_from_storage: bool
+    message: str
+
+
+class StorageDeleteRequest(BaseModel):
+    """Request schema for deleting a file directly from storage."""
+    storage_uri: str
+
+
 class ErrorResponse(BaseModel):
     """Error response schema."""
     request_id: str

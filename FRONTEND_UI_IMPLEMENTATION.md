@@ -79,12 +79,15 @@ Four tabs with full functionality:
 - Error handling with user-friendly messages
 - GCS uploads land in staging and are not queryable until moved to a domain
 
-**🗂️ File Manager Tab:**
-- Lists staged and domain documents
-- Lets the user choose Operations, Compliance, or Finance
-- Calls `/docs/move` to copy the document into the selected domain bucket
-- Shows indexing queued vs indexing retry-needed states
-- Updates the Move request ID in the sidebar
+**🗂️ File Explorer Tab:**
+- Traditional double-panel file explorer layout: Left column lists folders/directories with dynamic document counts inside parentheses (All Documents, Staging Active, Staging Archive, Operations, Compliance, Finance, and Problem Files), Right column displays the selected folder's contents.
+- Real-time search/filter bar to find files quickly by name, ID, or status.
+- Grid layout with details and contextual actions:
+  - **Move**: Classifies and copies staged files to a domain (via popover).
+  - **Index**: Triggers/retries indexing for domain-classified documents.
+  - **Delete**: Supports soft-delete or hard-delete options with optional storage cleanup (via popover).
+  - **Cleanup DB Record**: For database-only orphan files.
+  - **Delete File**: For storage-only untracked files.
 
 **📊 Status Tab:**
 - "Refresh Status" button

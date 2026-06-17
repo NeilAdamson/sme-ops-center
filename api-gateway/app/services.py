@@ -735,3 +735,110 @@ def browse_document_storage(db: Session) -> dict[str, Any]:
         "groups": groups,
         "orphan_docs": orphan_docs,
     }
+
+
+def delete_local_file(storage_uri: str) -> bool:
+    """Delete a local file from the uploads directory."""
+    if not storage_uri:
+        return False
+    # If storage_uri starts with "uploads/", extract the filename.
+    filename = storage_uri
+    if storage_uri.startswith("uploads/"):
+        filename = storage_uri[len("uploads/"):]
+    elif "/" in storage_uri:
+        filename = Path(storage_uri).name
+        
+    local_path = UPLOADS_DIR / filename
+    try:
+        if local_path.exists():
+            local_path.unlink()
+            logger.info(f"Deleted local file: {local_path}")
+            return True
+        else:
+            logger.warning(f"Local file does not exist: {local_path}")
+            return False
+    except Exception as e:
+        logger.error(f"Failed to delete local file {local_path}: {e}")
+        return False
+
+
+def delete_gcs_file(storage_uri: str) -> bool:
+    """Delete a blob from GCS."""
+    if not storage_uri or not storage_uri.startswith("gs://"):
+        return False
+    try:
+        from google.cloud import storage as gcs_storage
+        bucket_name, object_name = parse_gcs_uri(storage_uri)
+        client = gcs_storage.Client()
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(object_name)
+        if blob.exists():
+            blob.delete()
+            logger.info(f"Deleted GCS blob: {storage_uri}")
+            return True
+        else:
+            logger.warning(f"GCS blob does not exist: {storage_uri}")
+            return False
+    except Exception as e:
+        logger.error(f"Failed to delete GCS blob {storage_uri}: {e}")
+        return False
+
+
+def delete_document(
+    db: Session,
+    doc_id: int,
+    hard_delete: bool = False,
+    delete_storage: bool = True
+) -> tuple[bool, bool, str, str]:
+    """
+    Delete a document asset.
+    - If hard_delete is True: deletes row from DB completely.
+    - If hard_delete is False: soft deletes row in DB by setting deleted_at = datetime.utcnow().
+    - If delete_storage is True: deletes the storage file (local filesystem or GCS blob).
+    Returns (db_deleted, storage_deleted, filename, message).
+    """
+    if hard_delete:
+        doc = db.query(DocAsset).filter(DocAsset.id == doc_id).first()
+    else:
+        doc = db.query(DocAsset).filter(
+            DocAsset.id == doc_id,
+            DocAsset.deleted_at.is_(None)
+        ).first()
+        
+    if not doc:
+        return False, False, "", "Document not found"
+        
+    filename = doc.filename
+    storage_uri = doc.storage_uri
+    staging_uri = doc.staging_uri
+    
+    storage_deleted = False
+    if delete_storage:
+        # Delete main storage blob/file
+        if storage_uri.startswith("gs://"):
+            storage_deleted = delete_gcs_file(storage_uri)
+        else:
+            storage_deleted = delete_local_file(storage_uri)
+            
+        # Delete staging blob/file if it exists and is different from storage_uri
+        if staging_uri and staging_uri != storage_uri:
+            if staging_uri.startswith("gs://"):
+                delete_gcs_file(staging_uri)
+            else:
+                delete_local_file(staging_uri)
+                
+    db_deleted = False
+    if hard_delete:
+        db.delete(doc)
+        db.commit()
+        db_deleted = True
+        message = f"Document '{filename}' permanently deleted from database"
+    else:
+        from datetime import datetime
+        doc.deleted_at = datetime.utcnow()
+        db.commit()
+        db_deleted = True
+        message = f"Document '{filename}' soft-deleted"
+        
+    return db_deleted, storage_deleted, filename, message
+

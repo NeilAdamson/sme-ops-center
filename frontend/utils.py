@@ -156,3 +156,38 @@ def trigger_index(doc_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
     except requests.exceptions.RequestException as e:
         logger.error(f"Index queue request failed: {e}")
         return _error_payload(e, "Index queue request failed")
+
+
+def delete_document(doc_id: int, hard_delete: bool = False, delete_storage: bool = True) -> Optional[Dict[str, Any]]:
+    """Delete a document asset from DB and optionally storage."""
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}/docs/{doc_id}/delete",
+            json={
+                "hard_delete": hard_delete,
+                "delete_storage": delete_storage,
+            },
+            timeout=30
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Delete failed: {e}")
+        return _error_payload(e, "Document delete failed")
+
+
+def delete_storage_file(storage_uri: str) -> Optional[Dict[str, Any]]:
+    """Delete an untracked file directly from storage."""
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}/docs/delete-storage",
+            json={"storage_uri": storage_uri},
+            timeout=30
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Storage delete failed: {e}")
+        return _error_payload(e, "Storage delete failed")
+
+
