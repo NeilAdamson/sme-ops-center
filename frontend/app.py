@@ -98,7 +98,7 @@ def _render_browse_file_rows(files: list) -> None:
 
 
 def _render_storage_explorer_tree(browse_result: dict) -> None:
-    """Render domain-grouped storage explorer using nested expanders."""
+    """Render domain-grouped storage explorer using flat expanders (no nesting)."""
     groups = browse_result.get("groups", [])
     source = browse_result.get("source", "unknown")
     st.caption(f"Storage source: `{source}`")
@@ -109,17 +109,19 @@ def _render_storage_explorer_tree(browse_result: dict) -> None:
     if staging_groups:
         staging_count = sum(g.get("file_count", 0) for g in staging_groups)
         staging_bucket = staging_groups[0].get("bucket", "unknown")
-        with st.expander(f"📁 Staging ({staging_count} files)", expanded=True):
-            st.caption(f"Bucket: `{staging_bucket}`")
-            for group in staging_groups:
-                if group.get("id") == "staging":
-                    sub_label = f"Active uploads ({group.get('file_count', 0)})"
-                else:
-                    sub_label = f"Archived ({group.get('file_count', 0)})"
-                if group.get("error"):
-                    st.error(f"Could not list {sub_label}: {group.get('error')}")
-                with st.expander(sub_label, expanded=group.get("id") == "staging"):
-                    _render_browse_file_rows(group.get("files", []))
+        st.markdown(f"**Staging** ({staging_count} files)")
+        st.caption(f"Bucket: `{staging_bucket}`")
+        for group in staging_groups:
+            if group.get("id") == "staging":
+                sub_label = f"Active uploads ({group.get('file_count', 0)})"
+                expanded = True
+            else:
+                sub_label = f"Archived ({group.get('file_count', 0)})"
+                expanded = False
+            if group.get("error"):
+                st.error(f"Could not list {sub_label}: {group.get('error')}")
+            with st.expander(sub_label, expanded=expanded):
+                _render_browse_file_rows(group.get("files", []))
 
     for group in domain_groups:
         file_count = group.get("file_count", 0)
