@@ -62,9 +62,12 @@ Four tabs with full functionality:
 - GCS uploads land in the staging bucket and are not queryable until moved to a business domain
 
 #### 🗂️ File Manager Tab
-- Lists staged and domain documents
+- Domain-grouped **storage explorer** tree (Staging active/archive + Operations, Compliance, Finance) via `GET /docs/browse`
+- Lists files from GCS buckets merged with database metadata (filename, status, doc ID, untracked badge)
+- Move workflow for staged GCS documents awaiting classification
 - Lets the user select a target domain: Operations, Compliance, or Finance
 - Calls `POST /docs/move` to copy a document into `gs://<domain-bucket>/docs/<doc_id>/<filename>`
+- Refreshes the explorer after a successful move
 - Shows whether indexing was queued or indexing needs retry
 - Captures move `request_id` in the trust sidebar
 
@@ -138,6 +141,11 @@ Uploads a document to the API Gateway.
 Retrieves status of all uploaded documents.
 - **Endpoint:** `GET /docs/status`
 - **Returns:** Response dictionary with `request_id` and `documents[]` array
+
+### `get_doc_browse()`
+Browses document storage grouped by staging and business domains.
+- **Endpoint:** `GET /docs/browse`
+- **Returns:** Response dictionary with `request_id`, `source`, `groups[]` (bucket file listings), and `orphan_docs[]`
 
 ### `query_documents(query, domain="all")`
 Queries documents through Agent Search grounded generation.

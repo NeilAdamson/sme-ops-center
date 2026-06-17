@@ -17,6 +17,9 @@ from app.schemas import (
     DocDomainResponse,
     DocMoveRequest,
     DocMoveResponse,
+    DocBrowseResponse,
+    BrowseGroup,
+    BrowseFileItem,
 )
 from app.services import (
     generate_request_id,
@@ -32,6 +35,7 @@ from app.services import (
     enqueue_index_job,
     move_doc_to_domain,
     query_grounded_domains,
+    browse_document_storage,
     STORAGE_BACKEND,
 )
 from app.models import AuditModule, AuditStatus, IndexedStatus
@@ -321,6 +325,72 @@ async def get_docs_status(
                 error="Failed to retrieve document status",
                 detail=str(e)
             ).dict()
+        )
+
+
+@router.get("/browse", response_model=DocBrowseResponse)
+async def browse_document_storage_endpoint(
+    db: Session = Depends(get_db)
+):
+    """
+    Browse document storage grouped by staging and business domains.
+
+    Lists GCS bucket objects merged with doc_asset metadata when STORAGE_BACKEND=gcs.
+    """
+    request_id = generate_request_id()
+
+    try:
+        result = browse_document_storage(db)
+        groups = [
+            BrowseGroup(
+                id=group["id"],
+                label=group["label"],
+                bucket=group["bucket"],
+                prefix=group["prefix"],
+                file_count=group["file_count"],
+                files=[BrowseFileItem(**file_item) for file_item in group["files"]],
+                error=group.get("error"),
+            )
+            for group in result["groups"]
+        ]
+
+        create_audit_event(
+            db=db,
+            module=AuditModule.MODULE_A,
+            request_id=request_id,
+            sources_json={
+                "source": result["source"],
+                "group_count": len(groups),
+                "file_count": sum(group.file_count for group in groups),
+            },
+            status=AuditStatus.SUCCESS,
+        )
+
+        return DocBrowseResponse(
+            request_id=request_id,
+            source=result["source"],
+            groups=groups,
+            orphan_docs=result["orphan_docs"],
+        )
+
+    except Exception as e:
+        logger.error(f"Browse failed (request_id: {request_id}): {e}", exc_info=True)
+
+        create_audit_event(
+            db=db,
+            module=AuditModule.MODULE_A,
+            request_id=request_id,
+            status=AuditStatus.FAILURE,
+            error=str(e),
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=ErrorResponse(
+                request_id=request_id,
+                error="Failed to browse document storage",
+                detail=str(e),
+            ).dict(),
         )
 
 

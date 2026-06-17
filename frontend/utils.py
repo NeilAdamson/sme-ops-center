@@ -65,6 +65,20 @@ def get_document_status() -> Optional[Dict[str, Any]]:
         return _error_payload(e, "Status query failed")
 
 
+def get_doc_browse() -> Optional[Dict[str, Any]]:
+    """Browse document storage grouped by staging and business domains."""
+    try:
+        response = requests.get(
+            f"{API_BASE_URL}/docs/browse",
+            timeout=60
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Browse query failed: {e}")
+        return _error_payload(e, "Browse query failed")
+
+
 def query_documents(query: str, domain: str = "all") -> Optional[Dict[str, Any]]:
     """Query documents."""
     try:

@@ -5,7 +5,7 @@ import hashlib
 import logging
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from sqlalchemy.orm import Session
 from fastapi import UploadFile
 
@@ -539,4 +539,199 @@ def query_grounded_domains(query: str, domain_name: str, request_id: str) -> dic
         "domains_queried": [domain["domain"] for domain in domains],
         "grounding_score": max(scores) if scores else None,
         "errors": [],
+    }
+
+
+def _doc_to_browse_file_item(doc: DocAsset, uri: Optional[str] = None) -> dict[str, Any]:
+    """Build a browse file item from a doc_asset row."""
+    return {
+        "filename": doc.filename,
+        "uri": uri or doc.storage_uri,
+        "size": None,
+        "updated_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
+        "doc_id": doc.id,
+        "indexed_status": doc.indexed_status.value,
+        "domain": doc.domain,
+        "tracked": True,
+        "last_error": doc.last_error,
+    }
+
+
+def _blob_to_browse_file_item(
+    blob: Any,
+    bucket_name: str,
+    uri_map: dict[str, DocAsset],
+) -> dict[str, Any]:
+    """Build a browse file item from a GCS blob, merging doc_asset metadata when matched."""
+    uri = f"gs://{bucket_name}/{blob.name}"
+    doc = uri_map.get(uri)
+    filename = doc.filename if doc else Path(blob.name).name
+    return {
+        "filename": filename,
+        "uri": uri,
+        "size": blob.size,
+        "updated_at": blob.updated.isoformat() if blob.updated else None,
+        "doc_id": doc.id if doc else None,
+        "indexed_status": doc.indexed_status.value if doc else None,
+        "domain": doc.domain if doc else None,
+        "tracked": doc is not None,
+        "last_error": doc.last_error if doc else None,
+    }
+
+
+def _list_gcs_prefix_files(
+    bucket_name: str,
+    prefix: str,
+    uri_map: dict[str, DocAsset],
+) -> tuple[list[dict[str, Any]], Optional[str]]:
+    """List GCS objects under a prefix and merge with doc_asset metadata."""
+    from google.cloud import storage as gcs_storage
+    from google.cloud.exceptions import GoogleCloudError
+
+    try:
+        client = gcs_storage.Client()
+        bucket = client.bucket(bucket_name)
+        files = []
+        for blob in bucket.list_blobs(prefix=prefix):
+            if blob.name.endswith("/"):
+                continue
+            files.append(_blob_to_browse_file_item(blob, bucket_name, uri_map))
+        files.sort(key=lambda item: item["filename"].lower())
+        return files, None
+    except GoogleCloudError as exc:
+        logger.error(f"GCS list failed for gs://{bucket_name}/{prefix}: {exc}", exc_info=True)
+        return [], str(exc)
+    except Exception as exc:
+        logger.error(f"Unexpected GCS list error for gs://{bucket_name}/{prefix}: {exc}", exc_info=True)
+        return [], str(exc)
+
+
+def _build_db_only_browse_groups(db: Session, registry: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build browse groups from Postgres when storage backend is local."""
+    docs = get_all_docs(db)
+    staging_docs = [doc for doc in docs if not doc.domain]
+    groups: list[dict[str, Any]] = [
+        {
+            "id": "staging",
+            "label": "Staging (active)",
+            "bucket": registry["staging"].get("bucket", ""),
+            "prefix": registry["staging"].get("prefix", "docs/"),
+            "file_count": len(staging_docs),
+            "files": [_doc_to_browse_file_item(doc) for doc in staging_docs],
+            "error": None,
+        }
+    ]
+
+    archive_docs = [
+        doc for doc in docs
+        if doc.staging_uri and doc.staging_uri != doc.storage_uri
+    ]
+    groups.append({
+        "id": "staging_archive",
+        "label": "Staging (archive)",
+        "bucket": registry["staging"].get("bucket", ""),
+        "prefix": registry["staging"].get("archive_prefix", "archive/"),
+        "file_count": len(archive_docs),
+        "files": [_doc_to_browse_file_item(doc, doc.staging_uri) for doc in archive_docs],
+        "error": None,
+    })
+
+    for domain in registry["domains"]:
+        domain_docs = [doc for doc in docs if doc.domain == domain["domain"]]
+        groups.append({
+            "id": domain["domain"],
+            "label": domain["display_name"],
+            "bucket": domain["bucket"],
+            "prefix": domain["prefix"],
+            "file_count": len(domain_docs),
+            "files": [_doc_to_browse_file_item(doc) for doc in domain_docs],
+            "error": None,
+        })
+    return groups
+
+
+def browse_document_storage(db: Session) -> dict[str, Any]:
+    """
+    List document storage grouped by staging and business domains.
+    Merges GCS bucket listings with doc_asset metadata when STORAGE_BACKEND=gcs.
+    """
+    registry = get_domain_registry()
+    docs = get_all_docs(db)
+    uri_map: dict[str, DocAsset] = {}
+    for doc in docs:
+        uri_map[doc.storage_uri] = doc
+        if doc.staging_uri:
+            uri_map.setdefault(doc.staging_uri, doc)
+
+    if STORAGE_BACKEND == "gcs":
+        source = "gcs"
+        groups: list[dict[str, Any]] = []
+        staging = registry["staging"]
+        staging_bucket = staging["bucket"]
+
+        active_files, active_error = _list_gcs_prefix_files(
+            staging_bucket, staging["prefix"], uri_map
+        )
+        groups.append({
+            "id": "staging",
+            "label": "Staging (active)",
+            "bucket": staging_bucket,
+            "prefix": staging["prefix"],
+            "file_count": len(active_files),
+            "files": active_files,
+            "error": active_error,
+        })
+
+        archive_prefix = staging.get("archive_prefix", "archive/")
+        archive_files, archive_error = _list_gcs_prefix_files(
+            staging_bucket, archive_prefix, uri_map
+        )
+        groups.append({
+            "id": "staging_archive",
+            "label": "Staging (archive)",
+            "bucket": staging_bucket,
+            "prefix": archive_prefix,
+            "file_count": len(archive_files),
+            "files": archive_files,
+            "error": archive_error,
+        })
+
+        for domain in registry["domains"]:
+            domain_files, domain_error = _list_gcs_prefix_files(
+                domain["bucket"], domain["prefix"], uri_map
+            )
+            groups.append({
+                "id": domain["domain"],
+                "label": domain["display_name"],
+                "bucket": domain["bucket"],
+                "prefix": domain["prefix"],
+                "file_count": len(domain_files),
+                "files": domain_files,
+                "error": domain_error,
+            })
+    else:
+        source = "db_only"
+        groups = _build_db_only_browse_groups(db, registry)
+
+    listed_uris = {
+        file_item["uri"]
+        for group in groups
+        for file_item in group["files"]
+    }
+    orphan_docs = [
+        {
+            "doc_id": doc.id,
+            "filename": doc.filename,
+            "storage_uri": doc.storage_uri,
+            "indexed_status": doc.indexed_status.value,
+            "domain": doc.domain,
+        }
+        for doc in docs
+        if doc.storage_uri.startswith("gs://") and doc.storage_uri not in listed_uris
+    ]
+
+    return {
+        "source": source,
+        "groups": groups,
+        "orphan_docs": orphan_docs,
     }

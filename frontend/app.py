@@ -6,6 +6,7 @@ import streamlit as st
 from utils import (
     upload_document,
     get_document_status,
+    get_doc_browse,
     query_documents,
     get_storage_config,
     get_doc_domains,
@@ -68,6 +69,76 @@ def render_landing_page():
     
     st.markdown("---")
     st.markdown(f"*API Gateway: `{API_BASE_URL}`*")
+
+
+def _format_browse_file_line(file_item: dict) -> str:
+    """Format a single file row for the storage explorer tree."""
+    parts = [f"📄 {file_item.get('filename', 'unknown')}"]
+    status = file_item.get("indexed_status")
+    if status:
+        parts.append(status)
+    doc_id = file_item.get("doc_id")
+    if doc_id is not None:
+        parts.append(f"ID {doc_id}")
+    if not file_item.get("tracked", True):
+        parts.append("⚠ untracked")
+    return " | ".join(parts)
+
+
+def _render_browse_file_rows(files: list) -> None:
+    """Render file rows inside a browse group expander."""
+    if not files:
+        st.caption("No files.")
+        return
+    for file_item in files:
+        st.markdown(_format_browse_file_line(file_item))
+        st.caption(f"`{file_item.get('uri', '')}`")
+        if file_item.get("last_error"):
+            st.error(file_item.get("last_error"))
+
+
+def _render_storage_explorer_tree(browse_result: dict) -> None:
+    """Render domain-grouped storage explorer using nested expanders."""
+    groups = browse_result.get("groups", [])
+    source = browse_result.get("source", "unknown")
+    st.caption(f"Storage source: `{source}`")
+
+    staging_groups = [g for g in groups if g.get("id") in ("staging", "staging_archive")]
+    domain_groups = [g for g in groups if g.get("id") not in ("staging", "staging_archive")]
+
+    if staging_groups:
+        staging_count = sum(g.get("file_count", 0) for g in staging_groups)
+        staging_bucket = staging_groups[0].get("bucket", "unknown")
+        with st.expander(f"📁 Staging ({staging_count} files)", expanded=True):
+            st.caption(f"Bucket: `{staging_bucket}`")
+            for group in staging_groups:
+                if group.get("id") == "staging":
+                    sub_label = f"Active uploads ({group.get('file_count', 0)})"
+                else:
+                    sub_label = f"Archived ({group.get('file_count', 0)})"
+                if group.get("error"):
+                    st.error(f"Could not list {sub_label}: {group.get('error')}")
+                with st.expander(sub_label, expanded=group.get("id") == "staging"):
+                    _render_browse_file_rows(group.get("files", []))
+
+    for group in domain_groups:
+        file_count = group.get("file_count", 0)
+        label = group.get("label", group.get("id", "Domain"))
+        with st.expander(f"📁 {label} ({file_count} files)", expanded=False):
+            st.caption(f"Bucket: `{group.get('bucket', '')}` · prefix: `{group.get('prefix', '')}`")
+            if group.get("error"):
+                st.error(f"Could not list bucket: {group.get('error')}")
+            _render_browse_file_rows(group.get("files", []))
+
+    orphan_docs = browse_result.get("orphan_docs", [])
+    if orphan_docs:
+        st.warning(
+            f"{len(orphan_docs)} tracked document(s) in the database were not found in GCS listings."
+        )
+        for orphan in orphan_docs:
+            st.caption(
+                f"ID {orphan.get('doc_id')}: {orphan.get('filename')} — `{orphan.get('storage_uri')}`"
+            )
 
 
 def render_docs_page():
@@ -196,6 +267,20 @@ def render_docs_page():
             if domains_result:
                 st.json(domains_result)
 
+        st.markdown("### Storage explorer")
+        with st.spinner("Loading bucket contents..."):
+            browse_result = get_doc_browse()
+
+        if browse_result and "error" not in browse_result:
+            _render_storage_explorer_tree(browse_result)
+        else:
+            st.error("Could not load storage explorer.")
+            if browse_result:
+                st.json(browse_result)
+
+        st.markdown("---")
+        st.markdown("### Move staged documents")
+
         if status_result and "error" not in status_result:
             documents = status_result.get("documents", [])
             staged_docs = [
@@ -247,7 +332,7 @@ def render_docs_page():
                                         st.warning(result.get("message", "Document moved; indexing needs retry."))
                                     else:
                                         st.success("Document moved and indexing queued.")
-                                    st.json(result)
+                                    st.rerun()
                                 else:
                                     st.error("Document move failed.")
                                     if result:

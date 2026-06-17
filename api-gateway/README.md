@@ -102,6 +102,50 @@ Content-Type: application/json
 - Queues a Redis worker job to import the document into the matching Agent Search datastore
 - If Redis is temporarily unavailable after the copy succeeds, the move still succeeds and returns `indexing_error` so indexing can be retried
 
+#### Browse Document Storage
+```http
+GET /docs/browse
+```
+
+**Functionality:**
+- Lists GCS objects under staging (`docs/`, `archive/`) and each business-domain bucket (`docs/`)
+- Merges bucket listings with `doc_asset` metadata (filename, status, doc ID, errors)
+- Marks GCS objects without a database row as untracked
+- Reports database rows whose `storage_uri` was not found in bucket listings as `orphan_docs`
+- When `STORAGE_BACKEND=local`, returns groups built from Postgres only (`source: db_only`)
+
+**Response:**
+```json
+{
+  "request_id": "uuid",
+  "source": "gcs",
+  "groups": [
+    {
+      "id": "staging",
+      "label": "Staging (active)",
+      "bucket": "aiops-gc-poc-pilot-uploads-8aukzz",
+      "prefix": "docs/",
+      "file_count": 1,
+      "files": [
+        {
+          "filename": "example.pdf",
+          "uri": "gs://aiops-gc-poc-pilot-uploads-8aukzz/docs/uuid/example.pdf",
+          "size": 12345,
+          "updated_at": "2026-06-17T12:00:00",
+          "doc_id": 5,
+          "indexed_status": "staged",
+          "domain": null,
+          "tracked": true,
+          "last_error": null
+        }
+      ],
+      "error": null
+    }
+  ],
+  "orphan_docs": []
+}
+```
+
 #### Get Document Status
 ```http
 GET /docs/status

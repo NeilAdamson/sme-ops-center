@@ -43,6 +43,38 @@ class DocStatusResponse(BaseModel):
     documents: List[Dict[str, Any]]
 
 
+class BrowseFileItem(BaseModel):
+    """A file entry in the domain-grouped storage browser."""
+    filename: str
+    uri: str
+    size: Optional[int] = None
+    updated_at: Optional[str] = None
+    doc_id: Optional[int] = None
+    indexed_status: Optional[str] = None
+    domain: Optional[str] = None
+    tracked: bool
+    last_error: Optional[str] = None
+
+
+class BrowseGroup(BaseModel):
+    """A browse group (staging or business domain bucket)."""
+    id: str
+    label: str
+    bucket: str
+    prefix: str
+    file_count: int
+    files: List[BrowseFileItem]
+    error: Optional[str] = None
+
+
+class DocBrowseResponse(BaseModel):
+    """Response schema for domain-grouped storage browse."""
+    request_id: str
+    source: str
+    groups: List[BrowseGroup]
+    orphan_docs: List[Dict[str, Any]] = []
+
+
 class DocDomainResponse(BaseModel):
     """Response schema for configured document domains."""
     request_id: str

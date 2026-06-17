@@ -153,7 +153,7 @@ A cohesive landing page with:
 **Admin**
 
 * Document list and lifecycle status (`staged`, `classified`, `moving`, `indexing`, `ready`, `failed`, `archived`)
-* File manager for staged uploads and domain destinations
+* File manager with domain-grouped storage explorer (staging active/archive + business domains) backed by GCS bucket listings merged with database metadata
 * Manual move action from staging into a selected business-domain bucket
 * Delete doc (soft delete) + reindex capability
 
